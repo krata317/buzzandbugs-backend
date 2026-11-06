@@ -341,12 +341,12 @@ Every route lives under `/api/v1`. Authentication:
 | Sessions         | `GET /auth/me`, `GET /auth/sessions`, `DELETE /auth/sessions/:id`, `DELETE /auth/sessions`                                                                                                                                                             |
 | Users            | `GET /users/:username`, `PATCH /users/me`, `POST /users/me/avatar`, `GET /users/:username/{posts,followers,following}`, `POST                                                                                                                          | DELETE /users/:username/{follow,block}`, `GET /users/me/blocked`, `GET /users/deleted` |
 | Buzz             | `GET /feed`, `POST /posts`, `GET                                                                                                                                                                                                                       | PATCH                                                                                  | DELETE /posts/:id`, `POST /posts/:id/vote`, `GET | POST /posts/:id/replies`, `DELETE /replies/:id` |
-| Moderation       | `POST /posts/:id/report`, `GET                                                                                                                                                                                                                         | POST /appeals/:token`                                                                  |
-| External content | `GET /news`, `GET /news/:section`, `GET /events`, `GET /events/:section`, `GET /trending`, `GET /trending/:section`                                                                                                                                    |
+| Moderation       | `POST /posts/:id/report`, `GET /appeals/:token`, `POST /appeals/:token`                                                                                                                                                                                |
+| External content | `GET /news`, `GET /news/:section`, `GET /events`, `GET /events/:section`, `GET /trending`, `GET /trending/:section`, `GET /podcasts`, `GET /podcasts/:section`                                                                                         |
 | Notifications    | `GET /notifications`, `GET /notifications/unread-count`, `POST /notifications/:id/read`, `POST /notifications/read-all`, `DELETE /notifications/:id`                                                                                                   |
 | Settings         | `GET /settings`, `PATCH /settings`                                                                                                                                                                                                                     |
 | Media            | `GET /media/avatars/:id`                                                                                                                                                                                                                               |
-| Admin            | `POST /admin/auth/login`, `POST /admin/auth/logout`, `GET /admin/auth/me`, `GET /admin/{overview,users,users/:id,moderation/cases,moderation/cases/:id/decision,sources,sources/:key/refresh,health,jobs,audit-logs}`                                  |
+| Admin            | `POST /admin/auth/login`, `POST /admin/auth/logout`, `GET /admin/auth/me`, `GET /admin/{overview,users,users/:id,moderation/cases,moderation/cases/:id/decision,sources,sources/:key/refresh,health,jobs,audit-logs}`, `DELETE /admin/audit-logs`      |
 | Health           | `GET /health`, `GET /health/live`                                                                                                                                                                                                                      |
 
 List endpoints return `{ "data": [...], "meta": { ... } }`; single resources return
@@ -362,7 +362,9 @@ List endpoints return `{ "data": [...], "meta": { ... } }`; single resources ret
   BleepingComputer, The Hacker News, OpenAI, Google Developers, Microsoft DevBlogs, Cloudflare,
   AWS, Netflix, Google Cloud, Google News India, Inc42.
 - Events: hackathons feed, LeetCode, CodeChef, Codeforces, CTFtime.
-- Trending: GitHub repositories, Hugging Face models and datasets, Papers with Code, podcasts.
+- Trending: GitHub repositories, Hugging Face models and datasets, Papers with Code.
+- Podcasts: The Changelog, freeCodeCamp, Software Engineering Daily, InfoQ, Syntax. Each feed is
+  read only far enough to collect its newest 20 episodes.
 
 ### Need a key or account
 
@@ -454,9 +456,28 @@ backend/
   lock keyed by (post, author), so concurrent requests cannot exceed the cap. Deleting a reply
   frees its slot.
 - **Posts** are capped at 5 per user per hour including reposts; replies are not counted.
-- **Moderation** is report-driven. Posts publish immediately. A report triggers OpenAI moderation;
-  flagged content is hidden, the author gets an appeal link valid for 7 days, and an unreviewed or
-  rejected case removes the post and issues a warning.
+- **Moderation is report-driven.** New posts publish immediately and are never checked up front.
+  A report opens a case and the text is checked against per-category score thresholds.
+  - If it passes, the post stays public and **the case and its reports are deleted**: no
+    notification, no audit entry, nothing in the admin console. That revision is then left alone
+    for `REPORT_RECHECK_COOLDOWN_HOURS` (6h), so reports cannot be used to drive repeated checks.
+  - If it fails, the post is hidden, the author is notified privately and receives a seven-day
+    appeal link.
+  - An appeal is the only thing that reaches a moderator. `/admin/moderation/cases` and the
+    dashboard counters are restricted to cases with `appealedAt` set, so automated outcomes never
+    appear in the admin portal.
+  - A post that is not appealed is **deleted permanently** with its replies, votes, mentions,
+    reports and reposts, and the case is deleted with it: the warning is the only record kept.
+  - A rejected appeal removes the post the same way, but keeps the case (detached, with a title
+    snapshot) for 30 days so the decision can be reviewed.
+- **Reports target a revision.** Editing a post increments its version, so a post that was
+  already reviewed can be reported again. Duplicate reports for the same revision are rejected
+  while its case is open, and a cleared revision is not re-checked during the cooldown.
+- **Report limits.** 20 per hour per client at the route, plus `REPORT_DAILY_LIMIT` (25) per
+  account per day; exceeding either returns 429.
+- **Retention.** Resolved cases, their reports and their audit entries are deleted 30 days after
+  the decision. Author-deleted posts stay as placeholders only while a reply or repost references
+  them; after 30 days with nothing attached they are deleted too.
 - **Warnings** stay active for 150 days. Two active warnings trigger a one-day ban, then 3, 7, 14,
   30, 60 days, and a permanent ban from the eighth warning.
 - **Account deletion** starts a 7-day recovery window, revokes sessions, and afterwards anonymises
@@ -506,9 +527,10 @@ for you.
 
 ## 17. Known limitations
 
-- Content moderation on **new posts** only runs after a report, by design (innocent until guilty).
 - Post editing requires `OPENAI_API_KEY`; without it edits are refused rather than published
   unchecked.
+- With `OPENAI_API_KEY` unset, reports open a case that stays `PROVIDER_FAILED` until a key is
+  configured. Posts are unaffected: moderation never gates publishing.
 - The link-preview integration uses linkpreview.net and is bounded by `LINK_PREVIEW_DAILY_LIMIT`;
   free-plan quotas are not published, so raise the limit only if your dashboard allows it.
 - `STORAGE_DRIVER=local` writes avatars to disk. The `StorageService` interface exists so object

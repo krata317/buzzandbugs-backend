@@ -2,16 +2,18 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { AppError, conflict, forbidden, notFound, rateLimited } from '../../lib/errors.js';
 import { advisoryLockKey } from '../../lib/crypto.js';
-import { addHours } from '../../lib/time.js';
+import { addHours, addDays } from '../../lib/time.js';
 import {
   MAX_REPLIES_PER_ROOT,
   POST_RATE_LIMIT,
   POST_RATE_WINDOW_MINUTES,
+  REMOVED_POST_RETENTION_DAYS,
 } from '../../config/constants.js';
 import { buildExcerpt, validateRichText } from '../../lib/rich-text.js';
 import { decodeCursor, encodeCursor } from '../../lib/pagination.js';
 import { assertNotBanned } from '../moderation/penalties.js';
 import { getModerationProvider } from '../moderation/provider.js';
+import { decideModeration } from '../moderation/policy.js';
 import { createNotification } from '../notifications/service.js';
 import { assertNotBlocked, getBlockedUserIds } from '../social/relations.js';
 import {
@@ -255,7 +257,8 @@ export const updatePost = async (
     title,
     body: validated ? validated.text : '',
   });
-  if (verdict.flagged) {
+  const decision = decideModeration(verdict);
+  if (decision.flagged) {
     throw new AppError(
       'UNPROCESSABLE_ENTITY',
       'This edit did not pass the content check and was not saved',
@@ -275,6 +278,8 @@ export const updatePost = async (
             }
           : {}),
         isEdited: true,
+        // A new revision can be reported again, even if an earlier one was reviewed.
+        version: { increment: 1 },
       },
     });
     if (validated) await syncMentions(tx, { postId }, validated.mentionIds);
@@ -303,9 +308,27 @@ export const deletePost = async (postId: string, authorId: string): Promise<void
   });
 };
 
+/**
+ * An author-deleted post is kept as a tombstone only while it still anchors something: a
+ * reply thread or a repost that quotes it. Once nothing points at it, the row is dead weight
+ * and is removed for good.
+ */
+export const purgeRemovedPostsWithoutThreads = async (): Promise<number> => {
+  const cutoff = addDays(new Date(), -REMOVED_POST_RETENTION_DAYS);
+
+  const result = await prisma.post.deleteMany({
+    where: {
+      visibility: 'REMOVED',
+      deletedAt: { lt: cutoff },
+      replies: { none: {} },
+      reposts: { none: {} },
+    },
+  });
+
+  return result.count;
+};
+
 export interface FeedCursor {
-  bucket: number;
-  followed: boolean;
   millis: number;
   id: string;
 }
@@ -313,16 +336,9 @@ export interface FeedCursor {
 const parseFeedCursor = (raw: string | undefined): FeedCursor | null => {
   const decoded = decodeCursor(raw);
   if (!decoded) return null;
-  const { b, f, t, i } = decoded;
-  if (
-    typeof b !== 'number' ||
-    typeof f !== 'boolean' ||
-    typeof t !== 'number' ||
-    typeof i !== 'string'
-  ) {
-    return null;
-  }
-  return { bucket: b, followed: f, millis: t, id: i };
+  const { t, i } = decoded;
+  if (typeof t !== 'number' || typeof i !== 'string') return null;
+  return { millis: t, id: i };
 };
 
 export interface FeedPage {
@@ -332,8 +348,8 @@ export interface FeedPage {
 }
 
 /**
- * Keyset pagination over a stable sort key: hour bucket, then followed-author boost, then
- * creation time and id. The bucket keeps the boost local so pages never overlap or skip.
+ * Strict reverse-chronological feed. Nothing is boosted or demoted: a post's position
+ * depends only on when it was published, so pagination stays stable and predictable.
  */
 export const listFeed = async (options: {
   viewerId: string | null;
@@ -351,34 +367,21 @@ export const listFeed = async (options: {
 
   const cursorClause = cursor
     ? Prisma.sql`AND (
-        floor(extract(epoch from p."createdAt") / 3600) < ${cursor.bucket}
-        OR (floor(extract(epoch from p."createdAt") / 3600) = ${cursor.bucket}
-            AND (f."id" IS NOT NULL) < ${cursor.followed})
-        OR (floor(extract(epoch from p."createdAt") / 3600) = ${cursor.bucket}
-            AND (f."id" IS NOT NULL) = ${cursor.followed}
-            AND floor(extract(epoch from p."createdAt") * 1000) < ${cursor.millis})
-        OR (floor(extract(epoch from p."createdAt") / 3600) = ${cursor.bucket}
-            AND (f."id" IS NOT NULL) = ${cursor.followed}
-            AND floor(extract(epoch from p."createdAt") * 1000) = ${cursor.millis}
+        floor(extract(epoch from p."createdAt") * 1000) < ${cursor.millis}
+        OR (floor(extract(epoch from p."createdAt") * 1000) = ${cursor.millis}
             AND p."id" < ${cursor.id})
       )`
     : Prisma.empty;
 
-  const rows = await prisma.$queryRaw<
-    Array<{ id: string; bucket: bigint; followed: boolean; millis: bigint }>
-  >`
+  const rows = await prisma.$queryRaw<Array<{ id: string; millis: bigint }>>`
     SELECT p."id",
-           floor(extract(epoch from p."createdAt") / 3600)::bigint AS bucket,
-           floor(extract(epoch from p."createdAt") * 1000)::bigint AS millis,
-           (f."id" IS NOT NULL) AS followed
+           floor(extract(epoch from p."createdAt") * 1000)::bigint AS millis
     FROM "Post" p
-    LEFT JOIN "Follow" f
-      ON f."followingId" = p."authorId" AND f."followerId" = ${viewerId ?? ''}
     WHERE p."visibility" = 'VISIBLE'
       AND p."deletedAt" IS NULL
       ${blockedClause}
       ${cursorClause}
-    ORDER BY bucket DESC, followed DESC, p."createdAt" DESC, p."id" DESC
+    ORDER BY p."createdAt" DESC, p."id" DESC
     LIMIT ${limit + 1}
   `;
 
@@ -401,17 +404,15 @@ export const listFeed = async (options: {
   return {
     items,
     hasMore,
-    nextCursor:
-      hasMore && last
-        ? encodeCursor({
-            b: Number(last.bucket),
-            f: last.followed,
-            t: Number(last.millis),
-            i: last.id,
-          })
-        : null,
+    nextCursor: hasMore && last ? encodeCursor({ t: Number(last.millis), i: last.id }) : null,
   };
 };
+
+/** Posts a profile should be credited with: published and not removed. */
+export const countVisiblePosts = async (authorId: string): Promise<number> =>
+  prisma.post.count({
+    where: { authorId, visibility: 'VISIBLE', deletedAt: null },
+  });
 
 export const listUserPosts = async (options: {
   authorId: string;
@@ -491,7 +492,17 @@ export const getPostForViewer = async (
   const votes = await viewerVotesFor(viewerId, [post.id]);
   const resolver = await mentionResolverFor([post.content, post.repostOf?.content]);
 
-  return toPostDetail(post, votes.get(post.id) ?? null, resolver, post.cases[0] ?? null);
+  // Only a hidden or appealed post carries moderation state, and only its author sees it.
+  // A report that is still being checked, or one that found nothing wrong, stays invisible.
+  const latestCase = post.cases[0] ?? null;
+  const authorVisibleCase =
+    isAuthor &&
+    latestCase &&
+    (latestCase.status === 'AWAITING_APPEAL' || latestCase.status === 'APPEALED')
+      ? latestCase
+      : null;
+
+  return toPostDetail(post, votes.get(post.id) ?? null, resolver, authorVisibleCase);
 };
 
 export const voteOnPost = async (

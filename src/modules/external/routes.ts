@@ -3,19 +3,25 @@ import type { SourceKind } from '@prisma/client';
 import { z } from 'zod';
 import { sendData, sendPage } from '../../lib/http.js';
 import { prisma } from '../../lib/prisma.js';
-import { EVENT_SECTIONS, NEWS_SECTIONS, TRENDING_SECTIONS } from '../../config/constants.js';
+import {
+  EVENT_SECTIONS,
+  NEWS_SECTIONS,
+  PODCAST_SECTIONS,
+  TRENDING_SECTIONS,
+} from '../../config/constants.js';
 import { paginateSection } from './service.js';
 import type { AppInstance } from '../../types.js';
 
 const querySchema = z.object({
-  seed: z.string().min(1).max(64).optional(),
   offset: z.coerce.number().int().min(0).default(0),
   limit: z.coerce.number().int().min(1).max(40).optional(),
 });
 
+type OrderField = 'newsOrder' | 'eventsOrder' | 'trendingOrder';
+
 const sectionOrder = async (
   userId: string | undefined,
-  field: 'newsOrder' | 'eventsOrder' | 'trendingOrder',
+  field: OrderField,
   fallback: readonly string[],
 ): Promise<string[]> => {
   if (!userId) return [...fallback];
@@ -41,8 +47,7 @@ const registerSectionRoutes = (
     tag: string;
     sections: readonly string[];
     initialCount: number;
-    orderField: 'newsOrder' | 'eventsOrder' | 'trendingOrder';
-    randomize: boolean;
+    orderField?: OrderField;
   },
 ): void => {
   app.get(
@@ -55,7 +60,9 @@ const registerSectionRoutes = (
       },
     },
     async (request, reply) => {
-      const order = await sectionOrder(request.auth?.user.id, options.orderField, options.sections);
+      const order = options.orderField
+        ? await sectionOrder(request.auth?.user.id, options.orderField, options.sections)
+        : [...options.sections];
 
       const sections = [];
       for (const section of order) {
@@ -64,12 +71,10 @@ const registerSectionRoutes = (
           section,
           offset: 0,
           limit: options.initialCount,
-          randomize: options.randomize,
         });
         if (page.total === 0) continue;
         sections.push({
           section,
-          seed: page.seed,
           total: page.total,
           hasMore: page.hasMore,
           items: page.items,
@@ -98,21 +103,19 @@ const registerSectionRoutes = (
         });
       }
 
+      const limit = request.query.limit ?? options.initialCount;
       const page = await paginateSection({
         kind: options.kind,
         section: request.params.section,
-        seed: request.query.seed,
         offset: request.query.offset,
-        limit: request.query.limit ?? options.initialCount,
-        randomize: options.randomize,
+        limit,
       });
 
       return sendPage(reply, page.items, {
-        seed: page.seed,
         total: page.total,
         hasMore: page.hasMore,
         offset: request.query.offset,
-        limit: request.query.limit ?? options.initialCount,
+        limit,
       });
     },
   );
@@ -126,7 +129,6 @@ export const externalRoutes: FastifyPluginAsyncZod = async (app) => {
     sections: NEWS_SECTIONS,
     initialCount: 3,
     orderField: 'newsOrder',
-    randomize: true,
   });
 
   registerSectionRoutes(app, {
@@ -136,7 +138,6 @@ export const externalRoutes: FastifyPluginAsyncZod = async (app) => {
     sections: EVENT_SECTIONS,
     initialCount: 5,
     orderField: 'eventsOrder',
-    randomize: false,
   });
 
   registerSectionRoutes(app, {
@@ -144,8 +145,15 @@ export const externalRoutes: FastifyPluginAsyncZod = async (app) => {
     basePath: '/trending',
     tag: 'Trending',
     sections: TRENDING_SECTIONS,
-    initialCount: 3,
+    initialCount: 4,
     orderField: 'trendingOrder',
-    randomize: true,
+  });
+
+  registerSectionRoutes(app, {
+    kind: 'PODCAST',
+    basePath: '/podcasts',
+    tag: 'Podcasts',
+    sections: PODCAST_SECTIONS,
+    initialCount: 4,
   });
 };

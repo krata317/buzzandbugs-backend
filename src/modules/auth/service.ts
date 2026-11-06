@@ -666,6 +666,12 @@ export const purgeDeletedAccounts = async (): Promise<number> => {
 
     const ban = await getActiveBan(user.id);
     const emailHash = hashEmail(user.emailNormalized);
+    const avatar = user.avatarFileId
+      ? await prisma.fileObject.findUnique({
+          where: { id: user.avatarFileId },
+          select: { id: true, key: true },
+        })
+      : null;
 
     await prisma.$transaction(async (tx) => {
       await tx.post.updateMany({
@@ -677,6 +683,9 @@ export const purgeDeletedAccounts = async (): Promise<number> => {
         data: { authorId: null, authorDeleted: true },
       });
       await tx.mention.deleteMany({ where: { userId: user.id } });
+      if (avatar) {
+        await tx.fileObject.delete({ where: { id: avatar.id } });
+      }
       if (ban) {
         const expiresAt = ban.permanent
           ? addDays(new Date(), 3650)
@@ -698,6 +707,12 @@ export const purgeDeletedAccounts = async (): Promise<number> => {
       // Deleting the user releases the username and cascades sessions, votes, follows, blocks.
       await tx.user.delete({ where: { id: user.id } });
     });
+
+    if (avatar) {
+      await getStorage()
+        .delete(avatar.key)
+        .catch(() => undefined);
+    }
 
     await queueEmail({
       to: user.email,

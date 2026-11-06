@@ -218,13 +218,14 @@ export const postRoutes: FastifyPluginAsyncZod = async (app) => {
     },
     async (request, reply) => {
       const auth = requireUser(request);
-      const result = await createReport({
+      await createReport({
         postId: request.params.id,
         reporterId: auth.user.id,
         reason: request.body.reason,
         details: request.body.details,
       });
-      return sendData(reply, { status: 'received', caseId: result.caseId }, 202);
+      // The outcome of a report is never disclosed to the reporter.
+      return sendData(reply, { status: 'received' }, 202);
     },
   );
 };

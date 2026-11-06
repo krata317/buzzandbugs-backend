@@ -108,6 +108,7 @@ export const buildApp = async (options: BuildAppOptions = {}): Promise<AppInstan
         { name: 'News' },
         { name: 'Events' },
         { name: 'Trending' },
+        { name: 'Podcasts' },
         { name: 'Notifications' },
         { name: 'Settings' },
         { name: 'Admin' },

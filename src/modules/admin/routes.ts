@@ -19,6 +19,7 @@ import { getBanState, countActiveWarnings } from '../moderation/penalties.js';
 import { env } from '../../config/env.js';
 import { decodeCursor, encodeCursor } from '../../lib/pagination.js';
 import { toPublicAuthor } from '../users/serialize.js';
+import { countVisiblePosts } from '../posts/service.js';
 
 const pageQuery = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(25),
@@ -120,21 +121,18 @@ export const adminRoutes: FastifyPluginAsyncZod = async (app) => {
         replies,
         reports,
         openCases,
-        awaitingAppeal,
         bannedUsers,
         pendingDeletion,
       ] = await Promise.all([
         prisma.user.count(),
         prisma.user.count({ where: { createdAt: { gte: since7d } } }),
         prisma.post.count({ where: { deletedAt: null, visibility: 'VISIBLE' } }),
-        prisma.post.count({ where: { createdAt: { gte: since24h } } }),
-        prisma.reply.count({ where: { deletedAt: null, visibility: 'VISIBLE' } }),
-        prisma.report.count(),
-        prisma.moderationCase.count({
-          where: {
-            status: { in: ['PENDING_PROVIDER', 'PROVIDER_FAILED', 'AWAITING_APPEAL', 'APPEALED'] },
-          },
+        prisma.post.count({
+          where: { createdAt: { gte: since24h }, visibility: 'VISIBLE', deletedAt: null },
         }),
+        prisma.reply.count({ where: { deletedAt: null, visibility: 'VISIBLE' } }),
+        // Only reports that reached a human review: the author appealed the automated decision.
+        prisma.report.count({ where: { case: { is: { appealedAt: { not: null } } } } }),
         prisma.moderationCase.count({ where: { status: 'APPEALED' } }),
         prisma.ban.count({
           where: {
@@ -151,9 +149,8 @@ export const adminRoutes: FastifyPluginAsyncZod = async (app) => {
         posts,
         postsLast24Hours: postsToday,
         replies,
-        reports,
-        openCases,
-        awaitingAppeal,
+        reportsReviewed: reports,
+        openAppeals: openCases,
         bannedUsers,
         pendingDeletions: pendingDeletion,
       });
@@ -191,9 +188,22 @@ export const adminRoutes: FastifyPluginAsyncZod = async (app) => {
           displayName: true,
           email: true,
           createdAt: true,
-          _count: { select: { posts: true, warnings: true } },
+          _count: { select: { warnings: true } },
         },
       });
+
+      const postCounts = await prisma.post.groupBy({
+        by: ['authorId'],
+        where: {
+          authorId: { in: users.map((user) => user.id) },
+          visibility: 'VISIBLE',
+          deletedAt: null,
+        },
+        _count: { _all: true },
+      });
+      const postCountByAuthor = new Map(
+        postCounts.map((entry) => [entry.authorId, entry._count._all]),
+      );
 
       const enriched = await Promise.all(
         users.map(async (user) => ({
@@ -202,7 +212,7 @@ export const adminRoutes: FastifyPluginAsyncZod = async (app) => {
           displayName: user.displayName,
           email: user.email,
           createdAt: user.createdAt.toISOString(),
-          postCount: user._count.posts,
+          postCount: postCountByAuthor.get(user.id) ?? 0,
           warningCount: user._count.warnings,
           ban: await getBanState(user.id),
         })),
@@ -241,12 +251,12 @@ export const adminRoutes: FastifyPluginAsyncZod = async (app) => {
           createdAt: true,
           about: true,
           avatarFileId: true,
-          _count: { select: { posts: true, replies: true, followers: true, following: true } },
+          _count: { select: { replies: true, followers: true, following: true } },
         },
       });
       if (!user) throw notFound('User not found');
 
-      const [warnings, bans, activeWarnings, ban] = await Promise.all([
+      const [warnings, bans, activeWarnings, ban, postCount] = await Promise.all([
         prisma.warning.findMany({
           where: { userId: user.id },
           orderBy: { createdAt: 'desc' },
@@ -259,6 +269,7 @@ export const adminRoutes: FastifyPluginAsyncZod = async (app) => {
         }),
         countActiveWarnings(user.id),
         getBanState(user.id),
+        countVisiblePosts(user.id),
       ]);
 
       await writeAuditLog({
@@ -276,7 +287,7 @@ export const adminRoutes: FastifyPluginAsyncZod = async (app) => {
         about: user.about,
         createdAt: user.createdAt.toISOString(),
         stats: {
-          posts: user._count.posts,
+          posts: postCount,
           replies: user._count.replies,
           followers: user._count.followers,
           following: user._count.following,
@@ -310,23 +321,19 @@ export const adminRoutes: FastifyPluginAsyncZod = async (app) => {
         tags: ['Admin'],
         summary: 'Moderation case queue',
         querystring: z.object({
-          status: z
-            .enum([
-              'PENDING_PROVIDER',
-              'PROVIDER_FAILED',
-              'AWAITING_APPEAL',
-              'APPEALED',
-              'RESOLVED_KEPT',
-              'RESOLVED_REMOVED',
-            ])
-            .optional(),
+          status: z.enum(['APPEALED', 'RESOLVED_KEPT', 'RESOLVED_REMOVED']).optional(),
           limit: z.coerce.number().int().min(1).max(100).default(25),
         }),
       },
     },
     async (request, reply) => {
+      // Only cases the author appealed ever reach a moderator. Automated decisions that were
+      // accepted, or that expired without an appeal, are deleted before they can appear here.
       const cases = await prisma.moderationCase.findMany({
-        where: request.query.status ? { status: request.query.status } : {},
+        where: {
+          appealedAt: { not: null },
+          ...(request.query.status ? { status: request.query.status } : {}),
+        },
         orderBy: [{ status: 'asc' }, { createdAt: 'desc' }],
         take: request.query.limit,
         include: {
@@ -355,20 +362,24 @@ export const adminRoutes: FastifyPluginAsyncZod = async (app) => {
           appealMessage: entry.appealMessage,
           reportCount: entry._count.reports,
           providerCategories: entry.providerCategories,
-          post: {
-            id: entry.post.id,
-            title: entry.post.title,
-            excerpt: entry.post.excerpt,
-            visibility: entry.post.visibility,
-            author: entry.post.author
-              ? {
-                  id: entry.post.author.id,
-                  username: entry.post.author.username,
-                  displayName: entry.post.author.displayName,
-                  email: entry.post.author.email,
-                }
-              : null,
-          },
+          // The post is detached once it has been removed; the snapshot keeps the record readable.
+          postTitle: entry.postTitle,
+          post: entry.post
+            ? {
+                id: entry.post.id,
+                title: entry.post.title,
+                excerpt: entry.post.excerpt,
+                visibility: entry.post.visibility,
+                author: entry.post.author
+                  ? {
+                      id: entry.post.author.id,
+                      username: entry.post.author.username,
+                      displayName: entry.post.author.displayName,
+                      email: entry.post.author.email,
+                    }
+                  : null,
+              }
+            : null,
         })),
       );
     },
@@ -624,6 +635,33 @@ export const adminRoutes: FastifyPluginAsyncZod = async (app) => {
           limit: request.query.limit,
         },
       );
+    },
+  );
+
+  app.delete(
+    '/admin/audit-logs',
+    {
+      preHandler: app.authenticateAdmin,
+      schema: {
+        tags: ['Admin'],
+        summary: 'Delete every audit log entry',
+      },
+    },
+    async (request, reply) => {
+      const auth = requireAdmin(request);
+      const deleted = await prisma.auditLog.deleteMany({});
+
+      // The clear operation itself is recorded, so the log is never left without a trace
+      // of who emptied it.
+      await writeAuditLog({
+        actorType: 'ADMIN',
+        actorId: auth.admin.id,
+        action: 'admin.audit_logs_cleared',
+        metadata: { deleted: deleted.count },
+        ip: request.ip,
+      });
+
+      return sendData(reply, { deleted: deleted.count });
     },
   );
 };

@@ -156,12 +156,15 @@ describe('moderation', () => {
     const warnings = await prisma.warning.count({ where: { userId: author.id } });
     expect(warnings).toBe(0);
 
-    // A later successful run resolves the case without duplicating side effects.
+    // A later successful run clears the case: a report that finds nothing wrong leaves no
+    // trace in the admin console.
     setModerationProviderForTests(cleanProvider);
     await processModerationCase(moderationCase?.id ?? '');
     const resolved = await prisma.moderationCase.findUnique({ where: { id: moderationCase?.id } });
-    expect(resolved?.status).toBe('RESOLVED_KEPT');
-    expect(resolved?.flagged).toBe(false);
+    expect(resolved).toBeNull();
+
+    const stillVisible = await prisma.post.findUnique({ where: { id: post.id } });
+    expect(stillVisible?.visibility).toBe('VISIBLE');
   });
 
   it('accepts one appeal per link and rejects reuse', async () => {
@@ -310,9 +313,15 @@ describe('moderation', () => {
     });
     expect(decision.statusCode).toBe(200);
 
-    const stored = await prisma.post.findUnique({ where: { id: post.id } });
-    expect(stored?.visibility).toBe('REMOVED');
-    expect(stored?.content).toBeNull();
+    // Rejecting removes the content permanently and detaches the record.
+    expect(await prisma.post.findUnique({ where: { id: post.id } })).toBeNull();
+
+    const record = await prisma.moderationCase.findUnique({
+      where: { id: moderationCase?.id },
+    });
+    expect(record?.status).toBe('RESOLVED_REMOVED');
+    expect(record?.postId).toBeNull();
+    expect(record?.postTitle).toBe('Reject me');
 
     const warnings = await prisma.warning.count({ where: { userId: author.id } });
     expect(warnings).toBe(1);
@@ -340,16 +349,26 @@ describe('moderation', () => {
     const expired = await expireModerationAppeals();
     expect(expired).toBe(1);
 
-    const stored = await prisma.post.findUnique({ where: { id: post.id } });
-    expect(stored?.visibility).toBe('REMOVED');
+    // The post, its reports and its case are gone: nobody appealed, so no moderator saw it.
+    expect(await prisma.post.findUnique({ where: { id: post.id } })).toBeNull();
+    expect(await prisma.report.count({ where: { postId: post.id } })).toBe(0);
+    expect(await prisma.moderationCase.count({ where: { postTitle: 'No appeal' } })).toBe(0);
 
     const warnings = await prisma.warning.count({ where: { userId: author.id } });
     expect(warnings).toBe(1);
 
+    // The author keeps a record of the decision: the notification is not deleted.
+    const notification = await prisma.notification.findFirst({
+      where: { userId: author.id, type: 'moderation' },
+    });
+    expect(notification).toBeTruthy();
+    const daysLeft = ((notification?.expiresAt.getTime() ?? 0) - Date.now()) / 86_400_000;
+    expect(daysLeft).toBeGreaterThan(13.9);
+
     const audit = await prisma.auditLog.findFirst({
       where: { action: 'moderation.appeal_expired' },
     });
-    expect(audit).toBeTruthy();
+    expect(audit).toBeNull();
   });
 
   it('applies the warning progression and ban restrictions', async () => {

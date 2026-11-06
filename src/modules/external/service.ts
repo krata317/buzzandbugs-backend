@@ -4,6 +4,7 @@ import { logger } from '../../lib/logger.js';
 import {
   EVENT_ITEMS_PER_SECTION,
   NEWS_ITEMS_PER_SECTION,
+  PODCAST_ITEMS_PER_SECTION,
   TRENDING_ITEMS_PER_SECTION,
 } from '../../config/constants.js';
 import { adaptersForKind, allAdapters } from './registry.js';
@@ -21,6 +22,7 @@ const MAX_ITEMS_PER_SOURCE = 60;
 export const sectionLimitFor = (kind: SourceKind): number => {
   if (kind === 'NEWS') return NEWS_ITEMS_PER_SECTION;
   if (kind === 'EVENT') return EVENT_ITEMS_PER_SECTION;
+  if (kind === 'PODCAST') return PODCAST_ITEMS_PER_SECTION;
   return TRENDING_ITEMS_PER_SECTION;
 };
 
@@ -218,39 +220,6 @@ export const refreshSection = async (
   return results;
 };
 
-/** Deterministic PRNG so a seed keeps pagination stable across requests. */
-const mulberry32 = (seed: number) => {
-  let state = seed >>> 0;
-  return () => {
-    state = (state + 0x6d2b79f5) >>> 0;
-    let t = state;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-};
-
-const hashSeed = (seed: string): number => {
-  let hash = 2166136261;
-  for (let index = 0; index < seed.length; index += 1) {
-    hash ^= seed.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return hash >>> 0;
-};
-
-export const shuffleWithSeed = <T>(items: T[], seed: string): T[] => {
-  const random = mulberry32(hashSeed(seed));
-  const output = [...items];
-  for (let index = output.length - 1; index > 0; index -= 1) {
-    const swap = Math.floor(random() * (index + 1));
-    const current = output[index]!;
-    output[index] = output[swap]!;
-    output[swap] = current;
-  }
-  return output;
-};
-
 export const itemToDto = (item: ExternalItem) => ({
   id: item.id,
   source: item.sourceKey,
@@ -309,28 +278,25 @@ export interface SectionPage {
   items: ReturnType<typeof itemToDto>[];
   total: number;
   hasMore: boolean;
-  seed: string;
 }
 
+/**
+ * Sections are ordered once, by the worker, and served in that same order until the next
+ * refresh. Nothing is shuffled per request, so a reader sees a stable list across reloads.
+ */
 export const paginateSection = async (options: {
   kind: SourceKind;
   section: string;
-  seed?: string;
   offset: number;
   limit: number;
-  randomize: boolean;
 }): Promise<SectionPage> => {
-  const seed = options.seed ?? Math.random().toString(36).slice(2, 10);
   const loaded = await loadSectionItems(options.kind, options.section);
-
-  let ordered = options.kind === 'EVENT' ? orderEvents(loaded) : loaded;
-  if (options.randomize) ordered = shuffleWithSeed(ordered, seed);
-
+  const ordered = options.kind === 'EVENT' ? orderEvents(loaded) : loaded;
   const slice = ordered.slice(options.offset, options.offset + options.limit);
+
   return {
     items: slice.map(itemToDto),
     total: ordered.length,
     hasMore: options.offset + options.limit < ordered.length,
-    seed,
   };
 };

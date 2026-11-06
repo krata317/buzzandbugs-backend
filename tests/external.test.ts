@@ -181,7 +181,7 @@ describe('external content', () => {
     expect(source?.lastError).toBeNull();
   });
 
-  it('keeps pagination stable for a seed and randomises between seeds', async () => {
+  it('serves a stable newest-first order without shuffling', async () => {
     await ensureSources();
     const items: RawExternalItem[] = Array.from({ length: 12 }, (_, index) => ({
       externalId: `fake-source:${index}`,
@@ -194,46 +194,38 @@ describe('external content', () => {
     const first = await paginateSection({
       kind: 'NEWS',
       section: 'trending',
-      seed: 'seed-one',
       offset: 0,
       limit: 4,
-      randomize: true,
     });
-    const second = await paginateSection({
+    const again = await paginateSection({
       kind: 'NEWS',
       section: 'trending',
-      seed: 'seed-one',
-      offset: 4,
+      offset: 0,
       limit: 4,
-      randomize: true,
     });
 
-    const overlap = first.items.filter((item) =>
-      second.items.some((other) => other.id === item.id),
-    );
-    expect(overlap.length).toBe(0);
+    expect(again.items.map((item) => item.id)).toEqual(first.items.map((item) => item.id));
+    expect(first.items.map((item) => item.title)).toEqual([
+      'Story 0',
+      'Story 1',
+      'Story 2',
+      'Story 3',
+    ]);
     expect(first.total).toBe(12);
     expect(first.hasMore).toBe(true);
 
-    const sameSeedAgain = await paginateSection({
+    const second = await paginateSection({
       kind: 'NEWS',
       section: 'trending',
-      seed: 'seed-one',
-      offset: 0,
+      offset: 4,
       limit: 4,
-      randomize: true,
     });
-    expect(sameSeedAgain.items.map((item) => item.id)).toEqual(first.items.map((item) => item.id));
-
-    const differentSeed = await paginateSection({
-      kind: 'NEWS',
-      section: 'trending',
-      seed: 'seed-two',
-      offset: 0,
-      limit: 12,
-      randomize: true,
-    });
-    expect(differentSeed.items.length).toBe(12);
+    expect(second.items.map((item) => item.title)).toEqual([
+      'Story 4',
+      'Story 5',
+      'Story 6',
+      'Story 7',
+    ]);
   });
 
   it('orders events with ongoing first and excludes finished events', async () => {
@@ -278,7 +270,6 @@ describe('external content', () => {
       section: 'ctf',
       offset: 0,
       limit: 5,
-      randomize: false,
     });
 
     expect(page.total).toBe(2);

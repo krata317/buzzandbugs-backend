@@ -118,7 +118,7 @@ describe('admin', () => {
     const data = response.json().data;
     expect(data.users).toBe(1);
     expect(data.posts).toBe(2);
-    expect(data.openCases).toBe(0);
+    expect(data.openAppeals).toBe(0);
   });
 
   it('looks up users without exposing password hashes and audits the access', async () => {

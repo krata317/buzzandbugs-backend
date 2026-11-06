@@ -296,14 +296,16 @@ describe('buzz posts', () => {
     expect(notification).toBeTruthy();
   });
 
-  it('boosts followed authors inside the same time bucket and paginates stably', async () => {
+  it('returns posts in strict reverse-chronological order regardless of follows', async () => {
     const app = await getApp();
     const viewer = await createUser({ username: 'viewer' });
     const followed = await createUser({ username: 'followed' });
     const stranger = await createUser({ username: 'stranger' });
 
     await createPost(app, stranger.token, { title: 'Stranger 1', text: 'a' });
+    await new Promise((resolve) => setTimeout(resolve, 5));
     await createPost(app, followed.token, { title: 'Followed 1', text: 'b' });
+    await new Promise((resolve) => setTimeout(resolve, 5));
     await createPost(app, stranger.token, { title: 'Stranger 2', text: 'c' });
 
     const follow = await app.inject({
@@ -319,7 +321,11 @@ describe('buzz posts', () => {
       headers: bearer(viewer.token),
     });
     expect(feed.statusCode).toBe(200);
-    expect(feed.json().data[0].title).toBe('Followed 1');
+    expect(feed.json().data.map((post: { title: string }) => post.title)).toEqual([
+      'Stranger 2',
+      'Followed 1',
+      'Stranger 1',
+    ]);
 
     const page1 = await app.inject({
       method: 'GET',

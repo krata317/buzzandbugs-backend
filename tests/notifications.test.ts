@@ -50,7 +50,7 @@ describe('notifications', () => {
     expect(afterRead.json().data.count).toBe(0);
   });
 
-  it('expires notifications after seven days', async () => {
+  it('expires notifications after fourteen days', async () => {
     const app = await getApp();
     const author = await createUser({ username: 'expiry' });
     const replier = await createUser({ username: 'expiryreplier' });
@@ -59,8 +59,8 @@ describe('notifications', () => {
 
     const notification = await prisma.notification.findFirst({ where: { userId: author.id } });
     const days = ((notification?.expiresAt.getTime() ?? 0) - Date.now()) / 86_400_000;
-    expect(days).toBeGreaterThan(6.9);
-    expect(days).toBeLessThan(7.1);
+    expect(days).toBeGreaterThan(13.9);
+    expect(days).toBeLessThan(14.1);
   });
 
   it('aggregates repeated reposts into a single notification', async () => {

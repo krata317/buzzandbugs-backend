@@ -41,7 +41,7 @@ describe('settings', () => {
         accentColor: 'teal',
         newsOrder: ['security', 'ai', 'trending', 'leaders', 'india'],
         eventsOrder: ['ctf', 'contests', 'hackathons'],
-        trendingOrder: ['podcasts', 'papers', 'datasets', 'models', 'repositories', 'youtube'],
+        trendingOrder: ['papers', 'datasets', 'models', 'repositories', 'youtube'],
         notificationPrefs: { social: { email: true } },
       },
     });

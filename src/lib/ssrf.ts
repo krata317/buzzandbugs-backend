@@ -117,13 +117,29 @@ export interface SafeFetchOptions {
   maxRedirects?: number;
   headers?: Record<string, string>;
   accept?: string;
+  /**
+   * Stop reading once this many feed items have arrived. Podcast feeds can be several
+   * megabytes but only the newest entries are used, so the connection is closed early
+   * instead of downloading (and then discarding) the whole document.
+   */
+  stopAfterItems?: number;
 }
 
-const readLimited = async (response: Response, maxBytes: number): Promise<string> => {
+const countClosedItems = (chunk: string): number =>
+  (chunk.match(/<\/item>/gi)?.length ?? 0) + (chunk.match(/<\/entry>/gi)?.length ?? 0);
+
+const readLimited = async (
+  response: Response,
+  maxBytes: number,
+  stopAfterItems?: number,
+): Promise<string> => {
   if (!response.body) return '';
   const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
+  const decoder = new TextDecoder();
+  let text = '';
   let total = 0;
+  let items = 0;
+
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -133,9 +149,20 @@ const readLimited = async (response: Response, maxBytes: number): Promise<string
       await reader.cancel();
       throw new AppError('PAYLOAD_TOO_LARGE', 'Remote response exceeded the size limit');
     }
-    chunks.push(value);
+
+    const chunk = decoder.decode(value, { stream: true });
+    text += chunk;
+
+    if (stopAfterItems) {
+      items += countClosedItems(chunk);
+      if (items >= stopAfterItems) {
+        await reader.cancel();
+        break;
+      }
+    }
   }
-  return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString('utf8');
+
+  return text + decoder.decode();
 };
 
 /**
@@ -178,7 +205,7 @@ export const safeFetch = async (
       continue;
     }
 
-    const body = await readLimited(response, maxBytes);
+    const body = await readLimited(response, maxBytes, options.stopAfterItems);
     return {
       status: response.status,
       headers: response.headers,

@@ -34,7 +34,7 @@ export const appealRoutes: FastifyPluginAsyncZod = async (app) => {
       return sendData(reply, {
         caseId: moderationCase.id,
         status: moderationCase.status,
-        postTitle: moderationCase.post.title,
+        postTitle: moderationCase.post?.title ?? moderationCase.postTitle ?? 'Removed post',
         postHiddenAt: moderationCase.updatedAt.toISOString(),
         appealDeadline: moderationCase.appealExpiresAt?.toISOString() ?? null,
         appealUsed: moderationCase.appealUsedAt !== null,

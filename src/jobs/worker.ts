@@ -3,8 +3,13 @@ import { logger } from '../lib/logger.js';
 import { prisma } from '../lib/prisma.js';
 import { QUEUE } from './boss.js';
 import { deliverQueuedEmail } from '../modules/email/service.js';
-import { processModerationCase, expireModerationAppeals } from '../modules/moderation/service.js';
+import {
+  processModerationCase,
+  expireModerationAppeals,
+  purgeResolvedModerationCases,
+} from '../modules/moderation/service.js';
 import { refreshKind } from '../modules/external/service.js';
+import { purgeRemovedPostsWithoutThreads } from '../modules/posts/service.js';
 import {
   expireEmailRestrictions,
   expireOtps,
@@ -41,6 +46,17 @@ const QUEUE_OPTIONS: Record<string, PgBoss.Queue> = {
     retryLimit: 2,
     retryDelay: 300,
     retryBackoff: true,
+  },
+  [QUEUE.podcastRefresh]: {
+    name: QUEUE.podcastRefresh,
+    retryLimit: 2,
+    retryDelay: 300,
+    retryBackoff: true,
+  },
+  [QUEUE.moderationCaseRetention]: {
+    name: QUEUE.moderationCaseRetention,
+    retryLimit: 3,
+    retryDelay: 120,
   },
   [QUEUE.moderationExpireAppeals]: {
     name: QUEUE.moderationExpireAppeals,
@@ -107,6 +123,20 @@ export const registerWorkers = async (boss: PgBoss): Promise<void> => {
     logger.info({ results }, 'trending refresh finished');
   });
 
+  await boss.work(QUEUE.podcastRefresh, { batchSize: 1 }, async () => {
+    const results = await refreshKind('PODCAST');
+    logger.info({ results }, 'podcast refresh finished');
+  });
+
+  await boss.work(QUEUE.moderationCaseRetention, { batchSize: 1 }, async () => {
+    const [cases, posts] = await Promise.all([
+      purgeResolvedModerationCases(),
+      purgeRemovedPostsWithoutThreads(),
+    ]);
+    if (cases > 0) logger.info({ cases }, 'resolved moderation cases purged');
+    if (posts > 0) logger.info({ posts }, 'removed posts without threads purged');
+  });
+
   await boss.work(QUEUE.moderationExpireAppeals, { batchSize: 1 }, async () => {
     const expired = await expireModerationAppeals();
     if (expired > 0) logger.info({ expired }, 'moderation appeals expired');
@@ -156,9 +186,11 @@ export const writeHeartbeat = async (): Promise<void> => {
 export const registerSchedules = async (boss: PgBoss): Promise<void> => {
   const schedules: Array<{ name: string; cron: string }> = [
     { name: QUEUE.newsRefresh, cron: '*/30 * * * *' },
-    { name: QUEUE.eventsRefresh, cron: '0 */3 * * *' },
+    { name: QUEUE.eventsRefresh, cron: '0 * * * *' },
     { name: QUEUE.trendingRefresh, cron: '5 * * * *' },
+    { name: QUEUE.podcastRefresh, cron: '15 * * * *' },
     { name: QUEUE.moderationExpireAppeals, cron: '*/15 * * * *' },
+    { name: QUEUE.moderationCaseRetention, cron: '25 3 * * *' },
     { name: QUEUE.accountDeletionPurge, cron: '10 * * * *' },
     { name: QUEUE.notificationCleanup, cron: '20 * * * *' },
     { name: QUEUE.tokenCleanup, cron: '30 * * * *' },

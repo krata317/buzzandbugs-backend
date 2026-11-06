@@ -16,7 +16,7 @@ import {
   socialLinkKeys,
   toPublicAuthor,
 } from './serialize.js';
-import { listUserPosts } from '../posts/service.js';
+import { listUserPosts, countVisiblePosts } from '../posts/service.js';
 import {
   blockUser,
   followUser,
@@ -63,6 +63,40 @@ export const userRoutes: FastifyPluginAsyncZod = async (app) => {
   );
 
   app.get(
+    '/users/search',
+    {
+      config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
+      schema: {
+        tags: ['Users'],
+        summary: 'Find people by name or username, for mentions',
+        querystring: z.object({
+          q: z.string().trim().min(1).max(50),
+          limit: z.coerce.number().int().min(1).max(20).default(8),
+        }),
+      },
+    },
+    async (request, reply) => {
+      const term = request.query.q;
+      const users = await prisma.user.findMany({
+        where: {
+          OR: [
+            { usernameLower: { contains: term.toLowerCase() } },
+            { displayName: { contains: term, mode: 'insensitive' } },
+          ],
+        },
+        orderBy: { usernameLower: 'asc' },
+        take: request.query.limit,
+        select: { id: true, username: true, displayName: true, avatarFileId: true },
+      });
+
+      return sendData(
+        reply,
+        users.map((user) => toPublicAuthor(user, false)),
+      );
+    },
+  );
+
+  app.get(
     '/users/:username',
     {
       preHandler: app.optionalAuthenticate,
@@ -97,11 +131,12 @@ export const userRoutes: FastifyPluginAsyncZod = async (app) => {
         user.settings?.profileVisibility ?? profileVisibilityDefaults,
       );
 
-      const [counts, isFollowing, followsYou] = await Promise.all([
+      const [counts, postCount, isFollowing, followsYou] = await Promise.all([
         prisma.user.findUnique({
           where: { id: user.id },
-          select: { _count: { select: { followers: true, following: true, posts: true } } },
+          select: { _count: { select: { followers: true, following: true } } },
         }),
+        countVisiblePosts(user.id),
         viewer
           ? prisma.follow.findUnique({
               where: {
@@ -133,7 +168,7 @@ export const userRoutes: FastifyPluginAsyncZod = async (app) => {
         socialLinks: visibility.socialLinks ? parseSocialLinks(user.socialLinks) : {},
         createdAt: user.createdAt.toISOString(),
         stats: {
-          posts: counts?._count.posts ?? 0,
+          posts: postCount,
           followers: visibility.followers ? (counts?._count.followers ?? 0) : null,
           following: visibility.following ? (counts?._count.following ?? 0) : null,
         },

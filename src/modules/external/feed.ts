@@ -136,6 +136,28 @@ export interface ParsedFeed {
   items: RawExternalItem[];
 }
 
+const ITEM_BLOCK = /<item[\s>][\s\S]*?<\/item>/gi;
+const ENTRY_BLOCK = /<entry[\s>][\s\S]*?<\/entry>/gi;
+
+/**
+ * Keeps only the first `limit` items of a feed document and wraps them in a minimal
+ * envelope so the result is still valid XML. Used for large feeds where downloading and
+ * parsing the whole document is wasteful.
+ */
+export const sliceFeedXml = (xml: string, limit: number): string => {
+  const items = (xml.match(ITEM_BLOCK) ?? []).slice(0, limit);
+  if (items.length > 0) {
+    return `<rss><channel>${items.join('')}</channel></rss>`;
+  }
+
+  const entries = (xml.match(ENTRY_BLOCK) ?? []).slice(0, limit);
+  if (entries.length > 0) {
+    return `<feed>${entries.join('')}</feed>`;
+  }
+
+  return xml;
+};
+
 /** Parses RSS 2.0, Atom and RDF feeds into a single normalised shape. */
 export const parseFeed = (xml: string, sourceKey: string): ParsedFeed => {
   let document: Record<string, unknown>;

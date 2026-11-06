@@ -2,12 +2,14 @@ import type { SourceKind } from '@prisma/client';
 import { newsAdapters } from './sources/news.js';
 import { eventAdapters } from './sources/events.js';
 import { trendingAdapters } from './sources/trending.js';
+import { podcastAdapters } from './sources/podcasts.js';
 import type { SourceAdapter } from './types.js';
 
 export const allAdapters: SourceAdapter[] = [
   ...newsAdapters,
   ...eventAdapters,
   ...trendingAdapters,
+  ...podcastAdapters,
 ];
 
 export const adaptersForKind = (kind: SourceKind): SourceAdapter[] =>

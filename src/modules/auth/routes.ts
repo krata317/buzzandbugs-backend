@@ -22,6 +22,7 @@ import { listSessions, revokeAllSessions, revokeSession } from './session.js';
 import { prisma } from '../../lib/prisma.js';
 import { toPublicAuthor } from '../users/serialize.js';
 import { getBanState } from '../moderation/penalties.js';
+import { countVisiblePosts } from '../posts/service.js';
 
 const emailSchema = z.string().trim().toLowerCase().email().max(254);
 const passwordSchema = z.string().min(8).max(128);
@@ -193,14 +194,15 @@ export const authRoutes: FastifyPluginAsyncZod = async (app) => {
     },
     async (request, reply) => {
       const auth = requireUser(request);
-      const [deletion, ban, settings, counts] = await Promise.all([
+      const [deletion, ban, settings, counts, postCount] = await Promise.all([
         prisma.accountDeletionRequest.findUnique({ where: { userId: auth.user.id } }),
         getBanState(auth.user.id),
         prisma.userSettings.findUnique({ where: { userId: auth.user.id } }),
         prisma.user.findUnique({
           where: { id: auth.user.id },
-          select: { _count: { select: { posts: true, followers: true, following: true } } },
+          select: { _count: { select: { followers: true, following: true } } },
         }),
+        countVisiblePosts(auth.user.id),
       ]);
 
       const author = toPublicAuthor(auth.user, false);
@@ -217,7 +219,7 @@ export const authRoutes: FastifyPluginAsyncZod = async (app) => {
           createdAt: auth.user.createdAt.toISOString(),
         },
         stats: {
-          posts: counts?._count.posts ?? 0,
+          posts: postCount,
           followers: counts?._count.followers ?? 0,
           following: counts?._count.following ?? 0,
         },

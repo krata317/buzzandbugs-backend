@@ -62,6 +62,7 @@ enum SourceKind {
   NEWS
   EVENT
   TRENDING
+  PODCAST
 }
 
 enum AuditActor {
@@ -115,7 +116,7 @@ model UserSettings {
   accentColor       String   @default("violet")
   newsOrder         String[] @default(["trending", "ai", "security", "leaders", "india"])
   eventsOrder       String[] @default(["hackathons", "contests", "ctf"])
-  trendingOrder     String[] @default(["youtube", "repositories", "models", "datasets", "papers", "podcasts"])
+  trendingOrder     String[] @default(["youtube", "repositories", "models", "datasets", "papers"])
   profileVisibility Json     @default("{\"about\":true,\"socialLinks\":true,\"followers\":true,\"following\":true}")
   notificationPrefs Json     @default("{\"social\":{\"onPlatform\":true,\"email\":false},\"account\":{\"onPlatform\":true,\"email\":true},\"community\":{\"onPlatform\":false,\"email\":false},\"content\":{\"onPlatform\":true,\"email\":false}}")
   updatedAt         DateTime @updatedAt @db.Timestamptz(3)
@@ -236,12 +237,16 @@ model Post {
   replyCount    Int        @default(0)
   visibility    Visibility @default(VISIBLE)
   isEdited      Boolean    @default(false)
+  /** Incremented on every content edit so reports can target a specific revision. */
+  version       Int        @default(0)
   createdAt     DateTime   @default(now()) @db.Timestamptz(3)
   updatedAt     DateTime   @updatedAt @db.Timestamptz(3)
   deletedAt     DateTime?  @db.Timestamptz(3)
 
   author   User?            @relation(fields: [authorId], references: [id], onDelete: SetNull)
-  repostOf Post?            @relation("Reposts", fields: [repostOfId], references: [id], onDelete: SetNull)
+  // A repost is a derivative of the post it quotes: removing the original permanently
+  // removes the repost too, so no post can point at content that no longer exists.
+  repostOf Post?            @relation("Reposts", fields: [repostOfId], references: [id], onDelete: Cascade)
   reposts  Post[]           @relation("Reposts")
   replies  Reply[]
   votes    Vote[]
@@ -321,25 +326,32 @@ model Block {
 }
 
 model Report {
-  id         String       @id @default(cuid())
-  postId     String
-  reporterId String
-  reason     ReportReason
-  details    String?
-  caseId     String?
-  createdAt  DateTime     @default(now()) @db.Timestamptz(3)
+  id          String       @id @default(cuid())
+  postId      String
+  reporterId  String
+  /** The post revision this report applies to. A later edit allows a new report. */
+  postVersion Int          @default(0)
+  reason      ReportReason
+  details     String?
+  caseId      String?
+  createdAt   DateTime     @default(now()) @db.Timestamptz(3)
 
   post     Post            @relation(fields: [postId], references: [id], onDelete: Cascade)
   reporter User            @relation(fields: [reporterId], references: [id], onDelete: Cascade)
   case     ModerationCase? @relation(fields: [caseId], references: [id], onDelete: SetNull)
 
-  @@unique([postId, reporterId])
+  @@unique([postId, reporterId, postVersion])
   @@index([caseId])
 }
 
 model ModerationCase {
   id                 String           @id @default(cuid())
-  postId             String
+  /**
+   * Detached when the post is permanently removed, so the moderation record outlives the
+   * content it describes. `postTitle` keeps the record readable afterwards.
+   */
+  postId             String?
+  postTitle          String?
   status             ModerationStatus @default(PENDING_PROVIDER)
   flagged            Boolean?
   providerCategories Json?
@@ -357,7 +369,7 @@ model ModerationCase {
   createdAt          DateTime         @default(now()) @db.Timestamptz(3)
   updatedAt          DateTime         @updatedAt @db.Timestamptz(3)
 
-  post     Post      @relation(fields: [postId], references: [id], onDelete: Cascade)
+  post     Post?     @relation(fields: [postId], references: [id], onDelete: SetNull)
   reports  Report[]
   warnings Warning[]
 

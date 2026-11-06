@@ -1,6 +1,5 @@
 import { env } from '../../../config/env.js';
 import { safeFetch } from '../../../lib/ssrf.js';
-import { parseFeed } from '../feed.js';
 import {
   parseDate,
   safeUrl,
@@ -14,6 +13,24 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const asArray = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
+
+/** Minimum length for a video to be considered a talk or tutorial rather than a clip. */
+const MIN_VIDEO_SECONDS = 5 * 60;
+
+/** Parses an ISO-8601 duration such as PT1H2M10S into seconds. */
+export const parseIsoDuration = (value: unknown): number | null => {
+  if (typeof value !== 'string') return null;
+  const match = /^P(?:(\d+)D)?T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/i.exec(value.trim());
+  if (!match) return null;
+
+  const days = Number(match[1] ?? 0);
+  const hours = Number(match[2] ?? 0);
+  const minutes = Number(match[3] ?? 0);
+  const seconds = Number(match[4] ?? 0);
+  const total = days * 86_400 + hours * 3_600 + minutes * 60 + seconds;
+
+  return Number.isFinite(total) ? total : null;
+};
 
 const getJson = async (url: string) => {
   const response = await safeFetch(url, { timeoutMs: 20_000, maxBytes: 4 * 1024 * 1024 });
@@ -34,7 +51,7 @@ const youtubeAdapter: SourceAdapter = {
       throw new Error('YOUTUBE_API_KEY is not configured');
     }
 
-    const endpoint = `https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics&chart=mostPopular&videoCategoryId=28&regionCode=US&key=${encodeURIComponent(
+    const endpoint = `https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics,contentDetails&chart=mostPopular&videoCategoryId=28&regionCode=US&key=${encodeURIComponent(
       env.YOUTUBE_API_KEY,
     )}&maxResults=50`;
 
@@ -47,11 +64,14 @@ const youtubeAdapter: SourceAdapter = {
       const snippet = isRecord(entry.snippet) ? entry.snippet : null;
       if (!id || !snippet) return [];
 
-      const tags = asArray(snippet.tags).filter((tag): tag is string => typeof tag === 'string');
-      if (tags.some((tag) => tag.toLowerCase() === 'shorts')) return [];
-
       const title = typeof snippet.title === 'string' ? snippet.title : null;
       if (!title) return [];
+
+      const contentDetails = isRecord(entry.contentDetails) ? entry.contentDetails : null;
+      const durationSeconds = parseIsoDuration(contentDetails?.duration);
+      // Short clips are excluded by length rather than by a tag, which the API does not
+      // reliably provide. Unknown durations are dropped so the rule is never bypassed.
+      if (durationSeconds === null || durationSeconds < MIN_VIDEO_SECONDS) return [];
 
       const thumbnails = isRecord(snippet.thumbnails) ? snippet.thumbnails : null;
       const high = thumbnails && isRecord(thumbnails.high) ? thumbnails.high : null;
@@ -76,7 +96,8 @@ const youtubeAdapter: SourceAdapter = {
           publishedAt: parseDate(snippet.publishedAt),
           metadata: {
             platform: 'youtube',
-            tags,
+            durationSeconds,
+            tags: asArray(snippet.tags).filter((tag): tag is string => typeof tag === 'string'),
             views: statistics.viewCount ? Number(statistics.viewCount) : null,
             likes: statistics.likeCount ? Number(statistics.likeCount) : null,
             comments: statistics.commentCount ? Number(statistics.commentCount) : null,
@@ -272,42 +293,10 @@ const papersAdapter: SourceAdapter = {
   },
 };
 
-const PODCAST_FEEDS = [
-  { key: 'changelog', name: 'The Changelog', url: 'https://changelog.com/podcast/feed' },
-  { key: 'freecodecamp', name: 'freeCodeCamp', url: 'https://freecodecamp.libsyn.com/rss' },
-  {
-    key: 'sedaily',
-    name: 'Software Engineering Daily',
-    url: 'https://softwareengineeringdaily.com/feed/',
-  },
-  { key: 'syntax', name: 'Syntax', url: 'https://feed.syntax.fm/rss' },
-  { key: 'infoq', name: 'InfoQ', url: 'https://feed.infoq.com/' },
-];
-
-const podcastAdapters: SourceAdapter[] = PODCAST_FEEDS.map((feed) => ({
-  key: `podcast-${feed.key}`,
-  name: feed.name,
-  kind: 'TRENDING' as const,
-  section: 'podcasts',
-  url: feed.url,
-  async fetchItems(): Promise<RawExternalItem[]> {
-    const response = await safeFetch(feed.url, { timeoutMs: 20_000, maxBytes: 4 * 1024 * 1024 });
-    if (response.status !== 200) throw new Error(`HTTP ${response.status} from ${feed.name}`);
-    const parsed = parseFeed(response.body, `podcast-${feed.key}`);
-
-    return parsed.items.map((item) => ({
-      ...item,
-      author: item.author ?? parsed.title ?? feed.name,
-      metadata: { ...item.metadata, platform: 'podcast', publisher: parsed.title ?? feed.name },
-    }));
-  },
-}));
-
 export const trendingAdapters: SourceAdapter[] = [
   youtubeAdapter,
   repositoriesAdapter,
   modelsAdapter,
   datasetsAdapter,
   papersAdapter,
-  ...podcastAdapters,
 ];
