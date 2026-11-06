@@ -457,7 +457,9 @@ backend/
   frees its slot.
 - **Posts** are capped at 5 per user per hour including reposts; replies are not counted.
 - **Moderation is report-driven.** New posts publish immediately and are never checked up front.
-  A report opens a case and the text is checked against per-category score thresholds.
+  A report opens a case and the text is checked against per-category score thresholds. Every
+  threshold sits below `0.4`, graded by severity from `0.15` (`sexual/minors`) through `0.36`
+  (`harassment`) to a `0.38` default for any category the provider reports without its own entry.
   - If it passes, the post stays public and **the case and its reports are deleted**: no
     notification, no audit entry, nothing in the admin console. That revision is then left alone
     for `REPORT_RECHECK_COOLDOWN_HOURS` (6h), so reports cannot be used to drive repeated checks.

@@ -8,7 +8,11 @@ import {
   type ModerationProvider,
   type ModerationVerdict,
 } from '../src/modules/moderation/provider.js';
-import { decideModeration } from '../src/modules/moderation/policy.js';
+import {
+  categoryThresholds,
+  decideModeration,
+  defaultThreshold,
+} from '../src/modules/moderation/policy.js';
 import {
   createReport,
   expireModerationAppeals,
@@ -60,42 +64,67 @@ describe('moderation policy', () => {
     expect(decideModeration(clean).flagged).toBe(false);
   });
 
+  it('keeps every threshold strictly below 0.4', () => {
+    for (const [category, threshold] of Object.entries(categoryThresholds)) {
+      expect(threshold, category).toBeLessThan(0.4);
+      expect(threshold, category).toBeGreaterThan(0);
+    }
+    expect(defaultThreshold).toBeLessThan(0.4);
+  });
+
+  it('grades the thresholds by severity', () => {
+    expect(categoryThresholds['sexual/minors']).toBeLessThan(
+      categoryThresholds['hate/threatening'],
+    );
+    expect(categoryThresholds['hate/threatening']).toBeLessThan(
+      categoryThresholds['harassment/threatening'],
+    );
+    expect(categoryThresholds['harassment/threatening']).toBeLessThan(
+      categoryThresholds['violence/graphic'],
+    );
+    expect(categoryThresholds['violence/graphic']).toBeLessThan(categoryThresholds.harassment);
+    expect(categoryThresholds.harassment).toBeLessThan(defaultThreshold);
+  });
+
   it('ignores scores just under a category threshold', () => {
     const decision = decideModeration({
       flagged: false,
       categories: {},
-      scores: { harassment: 0.69 },
+      scores: { harassment: 0.35 },
     });
     expect(decision.flagged).toBe(false);
   });
 
-  it('acts on harassment at 0.7', () => {
+  it('acts on harassment at its threshold', () => {
     const decision = decideModeration({
       flagged: false,
       categories: {},
-      scores: { harassment: 0.7 },
+      scores: { harassment: 0.36 },
     });
     expect(decision.flagged).toBe(true);
     expect(decision.categories).toContain('harassment');
   });
 
-  it('acts when an ordinary category crosses the high threshold', () => {
-    const decision = decideModeration({
-      flagged: false,
-      categories: {},
-      scores: { harassment: 0.81 },
-    });
-    expect(decision.flagged).toBe(true);
-    expect(decision.categories).toContain('harassment');
+  it('applies the default threshold to categories without their own entry', () => {
+    expect(
+      decideModeration({ flagged: false, categories: {}, scores: { sexual: 0.37 } }).flagged,
+    ).toBe(false);
+    expect(
+      decideModeration({ flagged: false, categories: {}, scores: { sexual: 0.38 } }).flagged,
+    ).toBe(true);
   });
 
   it('acts earlier on the most severe categories', () => {
     const decision = decideModeration({
       flagged: false,
       categories: {},
-      scores: { 'sexual/minors': 0.3 },
+      scores: { 'sexual/minors': 0.15 },
     });
     expect(decision.flagged).toBe(true);
+    expect(
+      decideModeration({ flagged: false, categories: {}, scores: { 'sexual/minors': 0.14 } })
+        .flagged,
+    ).toBe(false);
   });
 });
 
