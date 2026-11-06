@@ -1,15 +1,10 @@
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { randomUUID } from 'node:crypto';
 import { prisma } from '../../lib/prisma.js';
-import { AppError, notFound } from '../../lib/errors.js';
+import { notFound } from '../../lib/errors.js';
 import { sendData, sendPage } from '../../lib/http.js';
 import { requireUser } from '../../plugins/auth.js';
-import { MAX_AVATAR_INPUT_BYTES } from '../../config/constants.js';
-import { getStorage } from '../storage/index.js';
-import { processAvatar } from '../storage/image.js';
 import {
-  avatarUrlFor,
   parseProfileVisibility,
   parseSocialLinks,
   profileVisibilityDefaults,
@@ -362,76 +357,6 @@ export const userRoutes: FastifyPluginAsyncZod = async (app) => {
         socialLinks: parseSocialLinks(updated.socialLinks),
         avatarUrl: author.avatarUrl,
       });
-    },
-  );
-
-  app.post(
-    '/users/me/avatar',
-    {
-      preHandler: app.authenticate,
-      schema: { tags: ['Users'], summary: 'Upload a profile picture' },
-    },
-    async (request, reply) => {
-      const auth = requireUser(request);
-      if (!request.isMultipart()) {
-        throw new AppError('UNSUPPORTED_MEDIA_TYPE', 'Send the image as multipart/form-data');
-      }
-
-      let part;
-      try {
-        part = await request.file({ limits: { fileSize: MAX_AVATAR_INPUT_BYTES, files: 1 } });
-      } catch {
-        throw new AppError('PAYLOAD_TOO_LARGE', 'Images must be at most 2 MB');
-      }
-      if (!part) throw new AppError('BAD_REQUEST', 'No file was uploaded');
-
-      let buffer: Buffer;
-      try {
-        buffer = await part.toBuffer();
-      } catch {
-        throw new AppError('PAYLOAD_TOO_LARGE', 'Images must be at most 2 MB');
-      }
-      if (part.file.truncated) {
-        throw new AppError('PAYLOAD_TOO_LARGE', 'Images must be at most 2 MB');
-      }
-      if (buffer.byteLength > MAX_AVATAR_INPUT_BYTES) {
-        throw new AppError('PAYLOAD_TOO_LARGE', 'Images must be at most 2 MB');
-      }
-
-      const processed = await processAvatar(buffer);
-      const key = `avatars/${auth.user.id}/${randomUUID()}.webp`;
-      await getStorage().put(key, processed.buffer, processed.mimeType);
-
-      const previousAvatarId = auth.user.avatarFileId;
-
-      const file = await prisma.fileObject.create({
-        data: {
-          key,
-          mimeType: processed.mimeType,
-          sizeBytes: processed.buffer.byteLength,
-          width: processed.width,
-          height: processed.height,
-          purpose: 'AVATAR',
-          ownerId: auth.user.id,
-        },
-      });
-
-      await prisma.user.update({
-        where: { id: auth.user.id },
-        data: { avatarFileId: file.id },
-      });
-
-      if (previousAvatarId) {
-        const previous = await prisma.fileObject.findUnique({ where: { id: previousAvatarId } });
-        if (previous) {
-          await prisma.fileObject.delete({ where: { id: previous.id } }).catch(() => undefined);
-          await getStorage()
-            .delete(previous.key)
-            .catch(() => undefined);
-        }
-      }
-
-      return sendData(reply, { avatarUrl: avatarUrlFor(file.id) }, 201);
     },
   );
 

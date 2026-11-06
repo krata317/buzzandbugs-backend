@@ -705,6 +705,7 @@ describe('admin visibility of moderation cases', () => {
     const appeal = await app.inject({
       method: 'POST',
       url: `/api/v1/appeals/${token}`,
+      headers: bearer(author.token),
       payload: { message: 'Please take another look.' },
     });
     expect(appeal.statusCode).toBe(201);

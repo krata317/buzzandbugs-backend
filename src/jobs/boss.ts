@@ -12,6 +12,7 @@ export const QUEUE = {
   trendingRefresh: 'trending.refresh',
   podcastRefresh: 'podcast.refresh',
   accountDeletionPurge: 'account.deletion-purge',
+  avatarBackfill: 'user.avatar-backfill',
   notificationCleanup: 'notification.cleanup',
   tokenCleanup: 'token.cleanup',
   emailRestrictionCleanup: 'email.restriction-cleanup',

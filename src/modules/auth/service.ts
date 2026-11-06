@@ -234,9 +234,13 @@ export const verifyRegistrationOtp = async (input: {
   return { registrationToken: token, expiresAt };
 };
 
-const createDefaultAvatar = async (username: string): Promise<string | null> => {
+/**
+ * Renders and stores the deterministic bug avatar used as every account's profile picture.
+ * The same seed always produces the same illustration, so re-running it is safe.
+ */
+export const createBugAvatar = async (seed: string): Promise<string | null> => {
   try {
-    const svg = renderBugAvatar(username);
+    const svg = renderBugAvatar(seed);
     const storage = getStorage();
     const key = `avatars/generated/${randomUUID()}.svg`;
     await storage.put(key, Buffer.from(svg, 'utf8'), 'image/svg+xml');
@@ -257,11 +261,35 @@ const createDefaultAvatar = async (username: string): Promise<string | null> => 
   }
 };
 
+/**
+ * Every account carries a generated bug avatar. Accounts without one — imported rows, a reset
+ * that ran before storage was available — are repaired here using the registration path.
+ */
+export const backfillMissingAvatars = async (limit = 100): Promise<number> => {
+  const users = await prisma.user.findMany({
+    where: { avatarFileId: null },
+    select: { id: true, username: true },
+    take: limit,
+    orderBy: { createdAt: 'asc' },
+  });
+
+  let assigned = 0;
+  for (const user of users) {
+    const fileId = await createBugAvatar(user.username);
+    if (!fileId) continue;
+    await prisma.user.update({ where: { id: user.id }, data: { avatarFileId: fileId } });
+    await prisma.fileObject
+      .update({ where: { id: fileId }, data: { ownerId: user.id } })
+      .catch(() => undefined);
+    assigned += 1;
+  }
+  return assigned;
+};
+
 export interface RegisteredUser {
   user: User;
   sessionToken: string;
 }
-
 export const completeRegistration = async (input: {
   registrationToken: string;
   username: string;
@@ -304,7 +332,7 @@ export const completeRegistration = async (input: {
   if (usernameTaken) throw conflict('That username is already taken');
 
   const passwordHash = await hashPassword(input.password);
-  const avatarFileId = await createDefaultAvatar(input.username);
+  const avatarFileId = await createBugAvatar(input.username);
 
   let user: User;
   try {
@@ -590,7 +618,7 @@ export const requestAccountDeletionOtp = async (input: {
   const code = await issueOtp(user.emailNormalized, 'ACCOUNT_DELETION', input.ip);
   await sendTransactionalEmail({
     to: user.email,
-    template: 'otp-register',
+    template: 'otp-account-deletion',
     params: { code, expiresInMinutes: OTP_TTL_MINUTES, displayName: user.displayName },
   });
 };
@@ -634,6 +662,10 @@ export const confirmAccountDeletion = async (input: {
   return { scheduledFor };
 };
 
+/**
+ * Cancelling removes the request entirely rather than flagging it: a cancelled row would keep
+ * the account in a half-deleted state and the user is told the request no longer exists.
+ */
 export const cancelAccountDeletion = async (userId: string): Promise<void> => {
   const request = await prisma.accountDeletionRequest.findUnique({ where: { userId } });
   if (!request || request.completedAt || request.cancelledAt) {
@@ -642,10 +674,50 @@ export const cancelAccountDeletion = async (userId: string): Promise<void> => {
   if (request.scheduledFor.getTime() <= Date.now()) {
     throw new AppError('BAD_REQUEST', 'The deletion date has already passed');
   }
-  await prisma.accountDeletionRequest.update({
-    where: { userId },
-    data: { cancelledAt: new Date() },
+
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { email: true, displayName: true },
   });
+
+  await prisma.accountDeletionRequest.delete({ where: { userId } });
+
+  if (user) {
+    await queueEmail({
+      to: user.email,
+      template: 'account-deletion-cancelled',
+      params: { displayName: user.displayName },
+      userId,
+    });
+  }
+};
+
+export interface PendingDeletion {
+  scheduledFor: Date;
+}
+
+/** The active deletion request for a user, or null when there is nothing scheduled. */
+export const getPendingDeletion = async (userId: string): Promise<PendingDeletion | null> => {
+  const request = await prisma.accountDeletionRequest.findUnique({
+    where: { userId },
+    select: { scheduledFor: true, cancelledAt: true, completedAt: true },
+  });
+  if (!request || request.cancelledAt || request.completedAt) return null;
+  return { scheduledFor: request.scheduledFor };
+};
+
+/**
+ * Appeal links are emailed, so the reader may not be signed in. Submitting still requires the
+ * author's own session: a link alone is not enough, and an account awaiting deletion cannot
+ * appeal until the request is cancelled.
+ */
+export const assertAppealAllowedFor = async (userId: string): Promise<void> => {
+  const pending = await getPendingDeletion(userId);
+  if (pending) {
+    throw forbidden(
+      'Your account is scheduled for deletion. Cancel the deletion from Settings before appealing.',
+    );
+  }
 };
 
 export const purgeDeletedAccounts = async (): Promise<number> => {

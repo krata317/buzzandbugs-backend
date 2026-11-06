@@ -94,39 +94,53 @@ export const refreshSource = async (
       items = await enrichItemsWithPreviews(items, getLinkPreview);
     }
 
-    for (const item of items) {
-      await prisma.externalItem.upsert({
-        where: { sourceKey_externalId: { sourceKey: adapter.key, externalId: item.externalId } },
-        create: {
-          sourceKey: adapter.key,
-          kind: adapter.kind,
-          section: adapter.section,
-          externalId: item.externalId,
-          title: item.title,
-          url: item.url,
-          summary: item.summary ?? null,
-          imageUrl: item.imageUrl ?? null,
-          author: item.author ?? null,
-          publishedAt: item.publishedAt ?? null,
-          startsAt: item.startsAt ?? null,
-          endsAt: item.endsAt ?? null,
-          metadata: item.metadata ? (item.metadata as object) : undefined,
-          fetchedAt: new Date(),
-        },
-        update: {
-          title: item.title,
-          url: item.url,
-          summary: item.summary ?? null,
-          imageUrl: item.imageUrl ?? null,
-          author: item.author ?? null,
-          publishedAt: item.publishedAt ?? null,
-          startsAt: item.startsAt ?? null,
-          endsAt: item.endsAt ?? null,
-          metadata: item.metadata ? (item.metadata as object) : undefined,
-          fetchedAt: new Date(),
-        },
-      });
-    }
+    /**
+     * The cache is replaced, not merged. Anything the adapter no longer returns — a video that
+     * is now too short, a closed event, a delisted repository — is deleted in the same
+     * transaction that writes the new snapshot, so stale rows cannot survive a refresh.
+     */
+    const keep = items.map((item) => item.externalId);
+
+    await prisma.$transaction([
+      prisma.externalItem.deleteMany({
+        where: { sourceKey: adapter.key, externalId: { notIn: keep } },
+      }),
+      ...items.map((item) =>
+        prisma.externalItem.upsert({
+          where: { sourceKey_externalId: { sourceKey: adapter.key, externalId: item.externalId } },
+          create: {
+            sourceKey: adapter.key,
+            kind: adapter.kind,
+            section: adapter.section,
+            externalId: item.externalId,
+            title: item.title,
+            url: item.url,
+            summary: item.summary ?? null,
+            imageUrl: item.imageUrl ?? null,
+            author: item.author ?? null,
+            publishedAt: item.publishedAt ?? null,
+            startsAt: item.startsAt ?? null,
+            endsAt: item.endsAt ?? null,
+            metadata: item.metadata ? (item.metadata as object) : undefined,
+            fetchedAt: new Date(),
+          },
+          update: {
+            kind: adapter.kind,
+            section: adapter.section,
+            title: item.title,
+            url: item.url,
+            summary: item.summary ?? null,
+            imageUrl: item.imageUrl ?? null,
+            author: item.author ?? null,
+            publishedAt: item.publishedAt ?? null,
+            startsAt: item.startsAt ?? null,
+            endsAt: item.endsAt ?? null,
+            metadata: item.metadata ? (item.metadata as object) : undefined,
+            fetchedAt: new Date(),
+          },
+        }),
+      ),
+    ]);
 
     await prisma.externalSource.update({
       where: { key: adapter.key },
@@ -204,19 +218,6 @@ export const refreshKind = async (kind: SourceKind): Promise<SourceRefreshResult
     await pruneSection(kind, section);
   }
 
-  return results;
-};
-
-export const refreshSection = async (
-  kind: SourceKind,
-  section: string,
-): Promise<SourceRefreshResult[]> => {
-  const adapters = adaptersForKind(kind).filter((adapter) => adapter.section === section);
-  const results: SourceRefreshResult[] = [];
-  for (const adapter of adapters) {
-    results.push(await refreshSource(adapter, { force: true }));
-  }
-  await pruneSection(kind, section);
   return results;
 };
 

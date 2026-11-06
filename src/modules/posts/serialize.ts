@@ -1,4 +1,4 @@
-import type { Post, Prisma, Reply, User } from '@prisma/client';
+import type { Post, Prisma, Reply } from '@prisma/client';
 import { env } from '../../config/env.js';
 import { hydrateMentions, type RichTextNode } from '../../lib/rich-text.js';
 import { toPublicAuthor, type PublicAuthor } from '../users/serialize.js';
@@ -177,9 +177,6 @@ export const userSummarySelect = {
 } satisfies Prisma.UserSelect;
 
 export type UserSummary = Prisma.UserGetPayload<{ select: typeof userSummarySelect }>;
-
-export const toAuthor = (user: UserSummary | null, deleted = false): PublicAuthor =>
-  toPublicAuthor(user as User | null, deleted);
 
 export const buildMentionResolver = (users: UserSummary[]): MentionResolver => {
   const map = new Map(users.map((user) => [user.id, user]));

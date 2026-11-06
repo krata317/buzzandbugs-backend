@@ -234,6 +234,33 @@ export const buildExcerpt = (text: string, maxLength = 280): string => {
   return `${collapsed.slice(0, maxLength - 1).trimEnd()}…`;
 };
 
+/**
+ * Renders a stored document to plain text, replacing mention ids with `@username`. Used for
+ * excerpts so a feed preview reads like the post body instead of collapsing to a bare "@".
+ */
+export const plainTextWithMentions = (
+  doc: RichTextNode,
+  resolve: (userId: string) => string | null,
+): string => {
+  const parts: string[] = [];
+  const visit = (node: RichTextNode): void => {
+    if (node.type === 'text' && typeof node.text === 'string') parts.push(node.text);
+    if (node.type === 'hardBreak') parts.push('\n');
+    if (node.type === 'mention') {
+      const id = typeof node.attrs?.id === 'string' ? node.attrs.id : '';
+      const username = id ? resolve(id) : null;
+      parts.push(username ? `@${username}` : '@unknown');
+    }
+    if (node.type === 'paragraph') parts.push('\n');
+    node.content?.forEach(visit);
+  };
+  visit(doc);
+  return parts
+    .join('')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+};
+
 /** Replaces mention labels with the current display name, keeping only the stored user id. */
 export const hydrateMentions = (
   doc: RichTextNode | null,

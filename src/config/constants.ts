@@ -71,16 +71,3 @@ export const PODCAST_SECTIONS = [
   'infoq',
   'syntax',
 ] as const;
-
-export const ALLOWED_AVATAR_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const;
-export const MAX_AVATAR_INPUT_BYTES = 2 * 1024 * 1024;
-export const MAX_AVATAR_INPUT_DIMENSION = 2048;
-export const AVATAR_OUTPUT_DIMENSION = 512;
-
-export const DEFAULT_PAGE_SIZE = 20;
-export const MAX_PAGE_SIZE = 50;
-
-export type NewsSection = (typeof NEWS_SECTIONS)[number];
-export type EventSection = (typeof EVENT_SECTIONS)[number];
-export type TrendingSection = (typeof TRENDING_SECTIONS)[number];
-export type PodcastSection = (typeof PODCAST_SECTIONS)[number];

@@ -183,13 +183,18 @@ describe('moderation', () => {
 
     const token = extractTokenFromLink('appealer@example.com', '/appeals');
 
-    const info = await app.inject({ method: 'GET', url: `/api/v1/appeals/${token}` });
+    const info = await app.inject({
+      method: 'GET',
+      url: `/api/v1/appeals/${token}`,
+      headers: bearer(author.token),
+    });
     expect(info.statusCode).toBe(200);
     expect(info.json().data.canAppeal).toBe(true);
 
     const appeal = await app.inject({
       method: 'POST',
       url: `/api/v1/appeals/${token}`,
+      headers: bearer(author.token),
       payload: { message: 'This post was taken out of context, please review.' },
     });
     expect(appeal.statusCode).toBe(201);
@@ -197,6 +202,7 @@ describe('moderation', () => {
     const reuse = await app.inject({
       method: 'POST',
       url: `/api/v1/appeals/${token}`,
+      headers: bearer(author.token),
       payload: { message: 'Trying again with the same link.' },
     });
     expect(reuse.statusCode).toBe(409);
@@ -226,12 +232,17 @@ describe('moderation', () => {
       data: { appealExpiresAt: new Date(Date.now() - 1000) },
     });
 
-    const info = await app.inject({ method: 'GET', url: `/api/v1/appeals/${token}` });
+    const info = await app.inject({
+      method: 'GET',
+      url: `/api/v1/appeals/${token}`,
+      headers: bearer(author.token),
+    });
     expect(info.json().data.canAppeal).toBe(false);
 
     const appeal = await app.inject({
       method: 'POST',
       url: `/api/v1/appeals/${token}`,
+      headers: bearer(author.token),
       payload: { message: 'Too late, but trying anyway.' },
     });
     expect(appeal.statusCode).toBe(400);
@@ -254,6 +265,7 @@ describe('moderation', () => {
     await app.inject({
       method: 'POST',
       url: `/api/v1/appeals/${token}`,
+      headers: bearer(author.token),
       payload: { message: 'Please look at this again, it is fine.' },
     });
 
@@ -298,6 +310,7 @@ describe('moderation', () => {
     await app.inject({
       method: 'POST',
       url: `/api/v1/appeals/${token}`,
+      headers: bearer(author.token),
       payload: { message: 'I disagree with this decision entirely.' },
     });
 

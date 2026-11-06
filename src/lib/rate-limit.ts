@@ -74,10 +74,6 @@ export const enforceRateLimit = async (
   }
 };
 
-export const resetRateLimit = async (key: string): Promise<void> => {
-  await prisma.rateCounter.deleteMany({ where: { key } });
-};
-
 export const cleanupRateCounters = async (): Promise<number> => {
   const result = await prisma.rateCounter.deleteMany({ where: { expiresAt: { lt: new Date() } } });
   return result.count;

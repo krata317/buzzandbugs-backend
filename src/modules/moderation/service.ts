@@ -1,6 +1,6 @@
 import { Prisma, type ModerationCase } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
-import { AppError, conflict, notFound } from '../../lib/errors.js';
+import { AppError, conflict, forbidden, notFound } from '../../lib/errors.js';
 import { advisoryLockKey, randomToken, sha256 } from '../../lib/crypto.js';
 import { addDays } from '../../lib/time.js';
 import { env } from '../../config/env.js';
@@ -20,6 +20,7 @@ import { queueEmail } from '../email/service.js';
 import { writeAuditLog } from '../admin/audit.js';
 import { enqueue, QUEUE } from '../../jobs/boss.js';
 import { logger } from '../../lib/logger.js';
+import { assertAppealAllowedFor } from '../auth/service.js';
 
 const ACTIVE_STATUSES = [
   'PENDING_PROVIDER',
@@ -471,12 +472,17 @@ export const expireModerationAppeals = async (): Promise<number> => {
 export const submitAppeal = async (
   token: string,
   message: string,
+  viewerId: string,
 ): Promise<{ caseId: string; status: string }> => {
   const moderationCase = await prisma.moderationCase.findUnique({
     where: { appealTokenHash: sha256(token) },
+    include: { post: { select: { authorId: true } } },
   });
 
   if (!moderationCase) throw notFound('Appeal link is invalid');
+  if (!moderationCase.post?.authorId || moderationCase.post.authorId !== viewerId) {
+    throw forbidden('Sign in as the author of this post to appeal');
+  }
   if (moderationCase.appealUsedAt) throw conflict('This appeal link has already been used');
   if (moderationCase.status !== 'AWAITING_APPEAL') {
     throw conflict('This case is no longer open for appeals');
@@ -484,6 +490,8 @@ export const submitAppeal = async (
   if (!moderationCase.appealExpiresAt || moderationCase.appealExpiresAt.getTime() <= Date.now()) {
     throw new AppError('BAD_REQUEST', 'The appeal window has closed');
   }
+
+  await assertAppealAllowedFor(viewerId);
 
   await prisma.moderationCase.update({
     where: { id: moderationCase.id },

@@ -47,8 +47,6 @@ export class AppError extends Error {
   }
 }
 
-export const badRequest = (message: string, details?: unknown) =>
-  new AppError('BAD_REQUEST', message, { details });
 export const unauthorized = (message = 'Authentication required') =>
   new AppError('UNAUTHORIZED', message);
 export const forbidden = (message = 'You are not allowed to perform this action') =>
@@ -58,6 +56,4 @@ export const conflict = (message: string, details?: unknown) =>
   new AppError('CONFLICT', message, { details });
 export const rateLimited = (message: string, retryAfterSeconds: number) =>
   new AppError('RATE_LIMITED', message, { retryAfterSeconds });
-export const unprocessable = (message: string, details?: unknown) =>
-  new AppError('UNPROCESSABLE_ENTITY', message, { details });
 export const serviceUnavailable = (message: string) => new AppError('SERVICE_UNAVAILABLE', message);

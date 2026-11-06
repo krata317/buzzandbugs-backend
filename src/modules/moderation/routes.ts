@@ -5,6 +5,8 @@ import { sendData } from '../../lib/http.js';
 import { notFound } from '../../lib/errors.js';
 import { sha256 } from '../../lib/crypto.js';
 import { submitAppeal } from '../moderation/service.js';
+import { getPendingDeletion } from '../auth/service.js';
+import { requireUser } from '../../plugins/auth.js';
 
 const tokenParam = z.object({ token: z.string().min(20).max(200) });
 
@@ -12,6 +14,7 @@ export const appealRoutes: FastifyPluginAsyncZod = async (app) => {
   app.get(
     '/appeals/:token',
     {
+      preHandler: app.optionalAuthenticate,
       schema: {
         tags: ['Moderation'],
         summary: 'Read the moderation case behind an appeal link',
@@ -22,7 +25,7 @@ export const appealRoutes: FastifyPluginAsyncZod = async (app) => {
       const moderationCase = await prisma.moderationCase.findUnique({
         where: { appealTokenHash: sha256(request.params.token) },
         include: {
-          post: { select: { id: true, title: true, createdAt: true } },
+          post: { select: { id: true, title: true, createdAt: true, authorId: true } },
         },
       });
 
@@ -30,6 +33,12 @@ export const appealRoutes: FastifyPluginAsyncZod = async (app) => {
 
       const expired =
         !moderationCase.appealExpiresAt || moderationCase.appealExpiresAt.getTime() <= Date.now();
+
+      const viewerId = request.auth?.user.id ?? null;
+      const isAuthor = Boolean(
+        viewerId && moderationCase.post?.authorId && moderationCase.post.authorId === viewerId,
+      );
+      const pending = viewerId ? await getPendingDeletion(viewerId) : null;
 
       return sendData(reply, {
         caseId: moderationCase.id,
@@ -39,8 +48,16 @@ export const appealRoutes: FastifyPluginAsyncZod = async (app) => {
         appealDeadline: moderationCase.appealExpiresAt?.toISOString() ?? null,
         appealUsed: moderationCase.appealUsedAt !== null,
         canAppeal:
-          moderationCase.status === 'AWAITING_APPEAL' && !moderationCase.appealUsedAt && !expired,
-        providerCategories: moderationCase.providerCategories,
+          moderationCase.status === 'AWAITING_APPEAL' &&
+          !moderationCase.appealUsedAt &&
+          !expired &&
+          isAuthor &&
+          !pending,
+        viewer: {
+          signedIn: Boolean(viewerId),
+          isAuthor,
+          pendingDeletion: pending ? { scheduledFor: pending.scheduledFor.toISOString() } : null,
+        },
       });
     },
   );
@@ -48,6 +65,7 @@ export const appealRoutes: FastifyPluginAsyncZod = async (app) => {
   app.post(
     '/appeals/:token',
     {
+      preHandler: app.authenticate,
       config: { rateLimit: { max: 10, timeWindow: '1 hour' } },
       schema: {
         tags: ['Moderation'],
@@ -57,7 +75,8 @@ export const appealRoutes: FastifyPluginAsyncZod = async (app) => {
       },
     },
     async (request, reply) => {
-      const result = await submitAppeal(request.params.token, request.body.message);
+      const auth = requireUser(request);
+      const result = await submitAppeal(request.params.token, request.body.message, auth.user.id);
       return sendData(reply, result, 201);
     },
   );

@@ -4,7 +4,6 @@ import type { AppInstance } from './types.js';
 import cookie from '@fastify/cookie';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
-import multipart from '@fastify/multipart';
 import rateLimit from '@fastify/rate-limit';
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
@@ -14,7 +13,7 @@ import {
   validatorCompiler,
 } from 'fastify-type-provider-zod';
 import { env } from './config/env.js';
-import { API_PREFIX, MAX_AVATAR_INPUT_BYTES } from './config/constants.js';
+import { API_PREFIX } from './config/constants.js';
 import { logger } from './lib/logger.js';
 import { registerErrorHandler } from './lib/http.js';
 import { registerAuth } from './plugins/auth.js';
@@ -78,9 +77,6 @@ export const buildApp = async (options: BuildAppOptions = {}): Promise<AppInstan
       new AppError('RATE_LIMITED', 'Too many requests, please slow down', {
         retryAfterSeconds: 60,
       }),
-  });
-  await app.register(multipart, {
-    limits: { fileSize: MAX_AVATAR_INPUT_BYTES, files: 1 },
   });
   await app.register(swagger, {
     openapi: {

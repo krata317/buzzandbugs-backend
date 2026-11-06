@@ -1,7 +1,6 @@
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { API_PREFIX } from '../../config/constants.js';
-import { AppError, unauthorized } from '../../lib/errors.js';
+import { AppError } from '../../lib/errors.js';
 import { sendData } from '../../lib/http.js';
 import { requireUser } from '../../plugins/auth.js';
 import { clearSessionCookies, setSessionCookies } from './cookies.js';
@@ -11,6 +10,7 @@ import {
   completePasswordReset,
   completeRegistration,
   confirmAccountDeletion,
+  getPendingDeletion,
   login,
   requestAccountDeletionOtp,
   requestPasswordReset,
@@ -38,7 +38,7 @@ const authResponseSchema = z.object({
       profileUrl: z.string(),
       createdAt: z.string(),
     }),
-    pendingDeletion: z.boolean(),
+    pendingDeletion: z.object({ scheduledFor: z.string() }).nullable(),
     ban: z.object({
       banned: z.boolean(),
       permanent: z.boolean(),
@@ -119,7 +119,7 @@ export const authRoutes: FastifyPluginAsyncZod = async (app) => {
             profileUrl: author.profileUrl,
             createdAt: user.createdAt.toISOString(),
           },
-          pendingDeletion: false,
+          pendingDeletion: null,
           ban: { banned: false, permanent: false, until: null },
         },
         201,
@@ -150,9 +150,7 @@ export const authRoutes: FastifyPluginAsyncZod = async (app) => {
       });
       setSessionCookies(reply, sessionToken);
 
-      const deletion = await prisma.accountDeletionRequest.findUnique({
-        where: { userId: user.id },
-      });
+      const deletion = await getPendingDeletion(user.id);
       const ban = await getBanState(user.id);
       const author = toPublicAuthor(user, false);
 
@@ -166,7 +164,7 @@ export const authRoutes: FastifyPluginAsyncZod = async (app) => {
           profileUrl: author.profileUrl,
           createdAt: user.createdAt.toISOString(),
         },
-        pendingDeletion: Boolean(deletion && !deletion.cancelledAt && !deletion.completedAt),
+        pendingDeletion: deletion ? { scheduledFor: deletion.scheduledFor.toISOString() } : null,
         ban,
       });
     },
@@ -195,7 +193,7 @@ export const authRoutes: FastifyPluginAsyncZod = async (app) => {
     async (request, reply) => {
       const auth = requireUser(request);
       const [deletion, ban, settings, counts, postCount] = await Promise.all([
-        prisma.accountDeletionRequest.findUnique({ where: { userId: auth.user.id } }),
+        getPendingDeletion(auth.user.id),
         getBanState(auth.user.id),
         prisma.userSettings.findUnique({ where: { userId: auth.user.id } }),
         prisma.user.findUnique({
@@ -234,10 +232,7 @@ export const authRoutes: FastifyPluginAsyncZod = async (app) => {
               notificationPrefs: settings.notificationPrefs,
             }
           : null,
-        pendingDeletion:
-          deletion && !deletion.cancelledAt && !deletion.completedAt
-            ? { scheduledFor: deletion.scheduledFor.toISOString() }
-            : null,
+        pendingDeletion: deletion ? { scheduledFor: deletion.scheduledFor.toISOString() } : null,
         ban,
         session: {
           id: auth.session.id,
@@ -438,7 +433,3 @@ export const authRoutes: FastifyPluginAsyncZod = async (app) => {
     },
   );
 };
-
-export const authRoutePrefix = API_PREFIX;
-
-export const ensureAuthenticated = unauthorized;

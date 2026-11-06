@@ -289,6 +289,8 @@ describe('buzz posts', () => {
 
     const stored = await prisma.post.findUnique({ where: { id: postId } });
     expect(JSON.stringify(stored?.content)).not.toContain('Old Name');
+    // The feed renders the stored excerpt, so a mention must survive as @username there.
+    expect(stored?.excerpt).toContain('@mentioned');
 
     const notification = await prisma.notification.findFirst({
       where: { userId: mentioned.id, type: 'mention' },

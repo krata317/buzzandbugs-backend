@@ -4,7 +4,7 @@ import { resetDatabase } from './setup.js';
 import { bearer, cookiesFrom, createPost, createUser, getApp } from './helpers/app.js';
 import { purgeDeletedAccounts } from '../src/modules/auth/service.js';
 import { issueWarning } from '../src/modules/moderation/penalties.js';
-import { extractOtp } from './helpers/mailbox.js';
+import { extractOtp, messagesFor } from './helpers/mailbox.js';
 import { hashEmail } from '../src/lib/crypto.js';
 
 let ipCounter = 0;
@@ -98,7 +98,9 @@ describe('account deletion', () => {
       payload: { identifier: 'deleteme', password: user.password },
     });
     expect(login.statusCode).toBe(200);
-    expect(login.json().data.pendingDeletion).toBe(true);
+    expect(login.json().data.pendingDeletion).toEqual({
+      scheduledFor: expect.any(String),
+    });
 
     const jar = cookiesFrom(login);
     const cancel = await app.inject({
@@ -108,8 +110,12 @@ describe('account deletion', () => {
     });
     expect(cancel.statusCode).toBe(200);
 
+    // The request is removed rather than flagged, so nothing is left to purge.
     const request = await prisma.accountDeletionRequest.findUnique({ where: { userId: user.id } });
-    expect(request?.cancelledAt).toBeTruthy();
+    expect(request).toBeNull();
+
+    const cancelledEmail = messagesFor(user.email).at(-1);
+    expect(cancelledEmail?.subject).toContain('cancelled');
 
     await purgeDeletedAccounts();
     const stillThere = await prisma.user.findUnique({ where: { id: user.id } });

@@ -9,7 +9,12 @@ import {
   POST_RATE_WINDOW_MINUTES,
   REMOVED_POST_RETENTION_DAYS,
 } from '../../config/constants.js';
-import { buildExcerpt, validateRichText } from '../../lib/rich-text.js';
+import {
+  buildExcerpt,
+  plainTextWithMentions,
+  validateRichText,
+  type ValidatedRichText,
+} from '../../lib/rich-text.js';
 import { decodeCursor, encodeCursor } from '../../lib/pagination.js';
 import { assertNotBanned } from '../moderation/penalties.js';
 import { getModerationProvider } from '../moderation/provider.js';
@@ -65,20 +70,38 @@ const viewerVotesFor = async (
   return new Map(votes.map((vote) => [vote.postId, vote.value]));
 };
 
-const assertMentionsAllowed = async (authorId: string, mentionIds: string[]): Promise<void> => {
-  if (mentionIds.length === 0) return;
+const assertMentionsAllowed = async (
+  authorId: string,
+  mentionIds: string[],
+): Promise<Map<string, string>> => {
+  const usernames = new Map<string, string>();
+  if (mentionIds.length === 0) return usernames;
+
   const users = await prisma.user.findMany({
     where: { id: { in: mentionIds } },
-    select: { id: true },
+    select: { id: true, username: true },
   });
   if (users.length !== new Set(mentionIds).size) {
     throw new AppError('VALIDATION_ERROR', 'One or more mentioned users do not exist');
   }
   for (const user of users) {
+    usernames.set(user.id, user.username);
     if (user.id === authorId) continue;
     await assertNotBlocked(authorId, user.id);
   }
+  return usernames;
 };
+
+/** Excerpt text with `@username` in place of every mention id. */
+const excerptFor = (
+  validated: ValidatedRichText,
+  usernames: Map<string, string>,
+  maxLength = 280,
+): string =>
+  buildExcerpt(
+    plainTextWithMentions(validated.doc, (id) => usernames.get(id) ?? null),
+    maxLength,
+  );
 
 const syncMentions = async (
   tx: Prisma.TransactionClient,
@@ -112,7 +135,9 @@ export const createPost = async (input: CreatePostInput): Promise<{ id: string }
   }
 
   const validated = hasContent ? validateRichText(input.content) : null;
-  if (validated) await assertMentionsAllowed(input.authorId, validated.mentionIds);
+  const mentionNames = validated
+    ? await assertMentionsAllowed(input.authorId, validated.mentionIds)
+    : new Map<string, string>();
 
   let repostTargetId: string | null = null;
   if (input.repostOfId) {
@@ -157,7 +182,7 @@ export const createPost = async (input: CreatePostInput): Promise<{ id: string }
         authorId: input.authorId,
         title,
         content: validated ? (validated.doc as unknown as Prisma.InputJsonValue) : Prisma.DbNull,
-        excerpt: validated ? buildExcerpt(validated.text) : '',
+        excerpt: validated ? excerptFor(validated, mentionNames) : '',
         kind: repostTargetId ? 'REPOST' : 'POST',
         repostOfId: repostTargetId,
       },
@@ -243,7 +268,9 @@ export const updatePost = async (
 
   const title = input.title !== undefined ? normalizeTitle(input.title) : post.title;
   const validated = input.content !== undefined ? validateRichText(input.content) : null;
-  if (validated) await assertMentionsAllowed(authorId, validated.mentionIds);
+  const mentionNames = validated
+    ? await assertMentionsAllowed(authorId, validated.mentionIds)
+    : new Map<string, string>();
 
   const provider = getModerationProvider();
   if (!provider.isConfigured()) {
@@ -274,7 +301,7 @@ export const updatePost = async (
         ...(validated
           ? {
               content: validated.doc as unknown as Prisma.InputJsonValue,
-              excerpt: buildExcerpt(validated.text),
+              excerpt: excerptFor(validated, mentionNames),
             }
           : {}),
         isEdited: true,
@@ -595,7 +622,7 @@ export const createReply = async (input: CreateReplyInput): Promise<{ id: string
   if (validated.text.trim().length === 0) {
     throw new AppError('VALIDATION_ERROR', 'A reply cannot be empty');
   }
-  await assertMentionsAllowed(input.authorId, validated.mentionIds);
+  const mentionNames = await assertMentionsAllowed(input.authorId, validated.mentionIds);
 
   const created = await prisma.$transaction(async (tx) => {
     // One lock per (root post, author) pair makes the ten-reply cap safe under concurrency.
@@ -625,7 +652,7 @@ export const createReply = async (input: CreateReplyInput): Promise<{ id: string
         parentId: input.parentId ?? null,
         authorId: input.authorId,
         content: validated.doc as unknown as Prisma.InputJsonValue,
-        excerpt: buildExcerpt(validated.text, 200),
+        excerpt: excerptFor(validated, mentionNames, 200),
         depth,
       },
       select: { id: true },

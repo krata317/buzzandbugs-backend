@@ -1,20 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import sharp from 'sharp';
 import { prisma } from '../src/lib/prisma.js';
 import { resetDatabase } from './setup.js';
 import { bearer, createUser, getApp } from './helpers/app.js';
-
-const multipart = (file: Buffer, filename: string, contentType: string) => {
-  const boundary = '----buzztestsboundary';
-  const body = Buffer.concat([
-    Buffer.from(
-      `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: ${contentType}\r\n\r\n`,
-    ),
-    file,
-    Buffer.from(`\r\n--${boundary}--\r\n`),
-  ]);
-  return { body, contentType: `multipart/form-data; boundary=${boundary}` };
-};
 
 describe('users and profiles', () => {
   beforeEach(async () => {
@@ -116,89 +103,18 @@ describe('users and profiles', () => {
     });
   });
 
-  it('accepts a valid avatar and re-encodes it to WebP', async () => {
-    const user = await createUser({ username: 'avatar' });
+  it('no longer accepts uploaded profile pictures', async () => {
+    const user = await createUser({ username: 'noavatarupload' });
     const app = await getApp();
 
-    const png = await sharp({
-      create: { width: 900, height: 700, channels: 3, background: { r: 30, g: 120, b: 200 } },
-    })
-      .png()
-      .toBuffer();
-
-    const { body, contentType } = multipart(png, 'me.png', 'image/png');
     const upload = await app.inject({
       method: 'POST',
       url: '/api/v1/users/me/avatar',
-      headers: { ...bearer(user.token), 'content-type': contentType },
-      payload: body,
+      headers: { ...bearer(user.token), 'content-type': 'application/json' },
+      payload: {},
     });
 
-    expect(upload.statusCode).toBe(201);
-    const avatarUrl = upload.json().data.avatarUrl as string;
-    expect(avatarUrl).toBeTruthy();
-
-    const fileId = avatarUrl.split('/').pop() ?? '';
-    const file = await prisma.fileObject.findUnique({ where: { id: fileId } });
-    expect(file?.mimeType).toBe('image/webp');
-    expect(file?.width).toBe(512);
-    expect(file?.height).toBe(512);
-
-    const served = await app.inject({ method: 'GET', url: avatarUrl });
-    expect(served.statusCode).toBe(200);
-    expect(served.headers['content-type']).toBe('image/webp');
-  });
-
-  it('rejects files that are not real images', async () => {
-    const user = await createUser({ username: 'fakeimage' });
-    const app = await getApp();
-
-    const { body, contentType } = multipart(
-      Buffer.from('this is definitely not an image'),
-      'evil.png',
-      'image/png',
-    );
-    const upload = await app.inject({
-      method: 'POST',
-      url: '/api/v1/users/me/avatar',
-      headers: { ...bearer(user.token), 'content-type': contentType },
-      payload: body,
-    });
-    expect(upload.statusCode).toBe(415);
-  });
-
-  it('rejects images that are too large or too high resolution', async () => {
-    const user = await createUser({ username: 'bigimage' });
-    const app = await getApp();
-
-    const tooBig = Buffer.concat([
-      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-      Buffer.alloc(3 * 1024 * 1024, 1),
-    ]);
-    const bigUpload = await app.inject({
-      method: 'POST',
-      url: '/api/v1/users/me/avatar',
-      headers: {
-        ...bearer(user.token),
-        'content-type': multipart(tooBig, 'big.png', 'image/png').contentType,
-      },
-      payload: multipart(tooBig, 'big.png', 'image/png').body,
-    });
-    expect(bigUpload.statusCode).toBe(413);
-
-    const wide = await sharp({
-      create: { width: 3000, height: 40, channels: 3, background: { r: 0, g: 0, b: 0 } },
-    })
-      .png()
-      .toBuffer();
-    const widePart = multipart(wide, 'wide.png', 'image/png');
-    const wideUpload = await app.inject({
-      method: 'POST',
-      url: '/api/v1/users/me/avatar',
-      headers: { ...bearer(user.token), 'content-type': widePart.contentType },
-      payload: widePart.body,
-    });
-    expect(wideUpload.statusCode).toBe(422);
+    expect(upload.statusCode).toBe(404);
   });
 
   it('returns nested reply trees and hides blocked authors', async () => {

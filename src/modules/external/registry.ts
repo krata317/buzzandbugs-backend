@@ -15,8 +15,5 @@ export const allAdapters: SourceAdapter[] = [
 export const adaptersForKind = (kind: SourceKind): SourceAdapter[] =>
   allAdapters.filter((adapter) => adapter.kind === kind);
 
-export const adaptersForSection = (kind: SourceKind, section: string): SourceAdapter[] =>
-  allAdapters.filter((adapter) => adapter.kind === kind && adapter.section === section);
-
 export const adapterByKey = (key: string): SourceAdapter | undefined =>
   allAdapters.find((adapter) => adapter.key === key);

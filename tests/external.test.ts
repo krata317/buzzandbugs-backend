@@ -174,11 +174,55 @@ describe('external content', () => {
       },
     };
     await refreshSource(failing, { force: true });
-    await refreshSource(adapterWith([]), { force: true });
+    await refreshSource(
+      adapterWith([
+        {
+          externalId: 'fake-source:recovered',
+          title: 'Recovered',
+          url: 'https://example.com/recovered',
+          publishedAt: new Date(),
+        },
+      ]),
+      { force: true },
+    );
 
     const source = await prisma.externalSource.findUnique({ where: { key: 'fake-source' } });
     expect(source?.consecutiveFailures).toBe(0);
     expect(source?.lastError).toBeNull();
+  });
+
+  it('replaces the cached items instead of merging them', async () => {
+    await ensureSources();
+
+    const first: RawExternalItem[] = [
+      {
+        externalId: 'fake-source:keep',
+        title: 'Keep me',
+        url: 'https://example.com/keep',
+        publishedAt: new Date(),
+      },
+      {
+        externalId: 'fake-source:drop',
+        title: 'Too short, later removed by the adapter',
+        url: 'https://example.com/drop',
+        publishedAt: new Date(Date.now() - 60_000),
+      },
+    ];
+    await refreshSource(adapterWith(first), { force: true });
+
+    const before = await prisma.externalItem.findMany({
+      where: { sourceKey: 'fake-source' },
+      select: { externalId: true },
+    });
+    expect(before).toHaveLength(2);
+
+    await refreshSource(adapterWith([first[0] as RawExternalItem]), { force: true });
+
+    const after = await prisma.externalItem.findMany({
+      where: { sourceKey: 'fake-source' },
+      select: { externalId: true },
+    });
+    expect(after.map((item) => item.externalId)).toEqual(['fake-source:keep']);
   });
 
   it('serves a stable newest-first order without shuffling', async () => {

@@ -85,6 +85,3 @@ export const listSessions = async (userId: string, currentSessionId?: string) =>
     current: session.id === currentSessionId,
   }));
 };
-
-export const countActiveSessions = async (userId: string): Promise<number> =>
-  prisma.session.count({ where: { userId, expiresAt: { gt: new Date() } } });

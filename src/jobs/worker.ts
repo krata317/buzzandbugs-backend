@@ -11,6 +11,7 @@ import {
 import { refreshKind } from '../modules/external/service.js';
 import { purgeRemovedPostsWithoutThreads } from '../modules/posts/service.js';
 import {
+  backfillMissingAvatars,
   expireEmailRestrictions,
   expireOtps,
   expirePasswordResets,
@@ -65,6 +66,11 @@ const QUEUE_OPTIONS: Record<string, PgBoss.Queue> = {
   },
   [QUEUE.accountDeletionPurge]: {
     name: QUEUE.accountDeletionPurge,
+    retryLimit: 3,
+    retryDelay: 120,
+  },
+  [QUEUE.avatarBackfill]: {
+    name: QUEUE.avatarBackfill,
     retryLimit: 3,
     retryDelay: 120,
   },
@@ -147,6 +153,11 @@ export const registerWorkers = async (boss: PgBoss): Promise<void> => {
     if (purged > 0) logger.info({ purged }, 'accounts purged');
   });
 
+  await boss.work(QUEUE.avatarBackfill, { batchSize: 1 }, async () => {
+    const assigned = await backfillMissingAvatars();
+    if (assigned > 0) logger.info({ assigned }, 'bug avatars assigned');
+  });
+
   await boss.work(QUEUE.notificationCleanup, { batchSize: 1 }, async () => {
     const removed = await cleanupExpiredNotifications();
     if (removed > 0) logger.info({ removed }, 'expired notifications removed');
@@ -192,6 +203,7 @@ export const registerSchedules = async (boss: PgBoss): Promise<void> => {
     { name: QUEUE.moderationExpireAppeals, cron: '*/15 * * * *' },
     { name: QUEUE.moderationCaseRetention, cron: '25 3 * * *' },
     { name: QUEUE.accountDeletionPurge, cron: '10 * * * *' },
+    { name: QUEUE.avatarBackfill, cron: '50 * * * *' },
     { name: QUEUE.notificationCleanup, cron: '20 * * * *' },
     { name: QUEUE.tokenCleanup, cron: '30 * * * *' },
     { name: QUEUE.emailRestrictionCleanup, cron: '40 * * * *' },

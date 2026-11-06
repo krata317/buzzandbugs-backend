@@ -27,7 +27,6 @@ instructions.
 | Logging    | Pino (pretty output in development)                         |
 | Email      | Nodemailer (SMTP, provider neutral)                         |
 | Passwords  | Argon2id (`argon2`)                                         |
-| Images     | `sharp` (EXIF strip + WebP re-encode)                       |
 | Feeds      | `fast-xml-parser`                                           |
 | Tests      | Vitest + Fastify injection                                  |
 
@@ -122,12 +121,6 @@ variable does.
 
 ```bash
 npm install
-```
-
-If `sharp` reports `Could not load the "sharp" module`, install the optional platform binaries:
-
-```bash
-npm install --include=optional sharp
 ```
 
 ---
@@ -339,7 +332,7 @@ Every route lives under `/api/v1`. Authentication:
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Authentication   | `POST /auth/register/request-otp`, `/auth/register/verify-otp`, `/auth/register/complete`, `/auth/login`, `/auth/logout`, `/auth/password/change`, `/auth/password/reset/{request,verify,complete}`, `/auth/account-deletion/{request,confirm,cancel}` |
 | Sessions         | `GET /auth/me`, `GET /auth/sessions`, `DELETE /auth/sessions/:id`, `DELETE /auth/sessions`                                                                                                                                                             |
-| Users            | `GET /users/:username`, `PATCH /users/me`, `POST /users/me/avatar`, `GET /users/:username/{posts,followers,following}`, `POST                                                                                                                          | DELETE /users/:username/{follow,block}`, `GET /users/me/blocked`, `GET /users/deleted` |
+| Users            | `GET /users/:username`, `PATCH /users/me`, `GET /users/:username/{posts,followers,following}`, `POST                                                                                                                                                   | DELETE /users/:username/{follow,block}`, `GET /users/me/blocked`, `GET /users/deleted` |
 | Buzz             | `GET /feed`, `POST /posts`, `GET                                                                                                                                                                                                                       | PATCH                                                                                  | DELETE /posts/:id`, `POST /posts/:id/vote`, `GET | POST /posts/:id/replies`, `DELETE /replies/:id` |
 | Moderation       | `POST /posts/:id/report`, `GET /appeals/:token`, `POST /appeals/:token`                                                                                                                                                                                |
 | External content | `GET /news`, `GET /news/:section`, `GET /events`, `GET /events/:section`, `GET /trending`, `GET /trending/:section`, `GET /podcasts`, `GET /podcasts/:section`                                                                                         |
@@ -429,7 +422,7 @@ backend/
 │   │   ├── notifications/      # in-app notifications
 │   │   ├── settings/           # user preferences
 │   │   ├── email/              # templates + Nodemailer transport
-│   │   ├── storage/            # local storage driver, avatar generation, image processing
+│   │   ├── storage/            # local storage driver and generated bug avatars
 │   │   ├── admin/              # admin API, audit log
 │   │   └── health/             # health endpoints
 │   ├── jobs/                   # pg-boss bootstrap, queues, schedules, handlers
@@ -498,7 +491,6 @@ backend/
 | `password authentication failed for user "bnb"`     | The password in `DATABASE_URL` does not match the role. Re-run `ALTER ROLE bnb PASSWORD '...';` as `postgres`. |
 | `database "bnb" does not exist`                     | Run the `CREATE DATABASE` statements from section 3.                                                           |
 | Prisma shadow database error                        | The `bnb` role needs `CREATEDB`. Run `ALTER ROLE bnb CREATEDB;` as `postgres`.                                 |
-| `Could not load the "sharp" module`                 | `npm install --include=optional sharp`.                                                                        |
 | Tests refuse to run                                 | The test database name must end with `_test`. Check `DATABASE_URL`/`TEST_DATABASE_URL`.                        |
 | `/api/v1/health` shows `worker: down`               | Start `npm run dev:worker`.                                                                                    |
 | No emails arrive                                    | `EMAIL_TRANSPORT=json` does not send. Configure SMTP or check `EmailDelivery` rows.                            |

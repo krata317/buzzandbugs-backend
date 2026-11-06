@@ -1,4 +1,4 @@
-import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, normalize, resolve } from 'node:path';
 import { env } from '../../config/env.js';
 
@@ -7,6 +7,8 @@ export interface StorageService {
   get(key: string): Promise<Buffer>;
   delete(key: string): Promise<void>;
   exists(key: string): Promise<boolean>;
+  /** Every stored key under a prefix, used by maintenance scripts. */
+  list(prefix: string): Promise<string[]>;
 }
 
 const assertSafeKey = (key: string): string => {
@@ -55,6 +57,29 @@ export class LocalStorageService implements StorageService {
       return false;
     }
   }
+
+  async list(prefix: string): Promise<string[]> {
+    const safePrefix = assertSafeKey(prefix).replace(/\/$/, '');
+    const root = this.pathFor(safePrefix);
+    const keys: string[] = [];
+
+    const walk = async (directory: string, relative: string): Promise<void> => {
+      let entries;
+      try {
+        entries = await readdir(directory, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const entry of entries) {
+        const key = relative ? `${relative}/${entry.name}` : entry.name;
+        if (entry.isDirectory()) await walk(join(directory, entry.name), key);
+        else if (entry.isFile()) keys.push(`${safePrefix}/${key}`);
+      }
+    };
+
+    await walk(root, '');
+    return keys;
+  }
 }
 
 let instance: StorageService | null = null;
@@ -64,8 +89,4 @@ export const getStorage = (): StorageService => {
     instance = new LocalStorageService(env.STORAGE_DIR);
   }
   return instance;
-};
-
-export const setStorageForTests = (next: StorageService | null): void => {
-  instance = next;
 };

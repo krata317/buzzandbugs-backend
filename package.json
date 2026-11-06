@@ -27,13 +27,13 @@
     "prisma:validate": "prisma validate",
     "prisma:status": "prisma migrate status",
     "admin:create": "tsx src/cli/admin-create.ts",
-    "admin:password": "tsx src/cli/admin-password.ts"
+    "admin:password": "tsx src/cli/admin-password.ts",
+    "avatars:reset": "tsx src/cli/reset-avatars.ts"
   },
   "dependencies": {
     "@fastify/cookie": "^11.0.2",
     "@fastify/cors": "^10.0.1",
     "@fastify/helmet": "^13.0.1",
-    "@fastify/multipart": "^9.0.1",
     "@fastify/rate-limit": "^10.2.2",
     "@fastify/static": "^8.0.3",
     "@fastify/swagger": "^9.4.0",
@@ -47,7 +47,6 @@
     "nodemailer": "^6.9.16",
     "pg-boss": "^10.1.5",
     "pino": "^9.5.0",
-    "sharp": "^0.33.5",
     "zod": "^3.24.1"
   },
   "devDependencies": {
