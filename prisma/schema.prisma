@@ -1,0 +1,557 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum OtpPurpose {
+  REGISTER
+  PASSWORD_RESET
+  ACCOUNT_DELETION
+}
+
+enum PostKind {
+  POST
+  REPOST
+}
+
+enum Visibility {
+  VISIBLE
+  HIDDEN
+  REMOVED
+}
+
+enum ModerationStatus {
+  PENDING_PROVIDER
+  PROVIDER_FAILED
+  AWAITING_APPEAL
+  APPEALED
+  RESOLVED_KEPT
+  RESOLVED_REMOVED
+}
+
+enum ReportReason {
+  SPAM
+  HARASSMENT
+  HATE_SPEECH
+  MISINFORMATION
+  SEXUAL_CONTENT
+  VIOLENCE
+  SELF_HARM
+  OTHER
+}
+
+enum NotificationCategory {
+  SOCIAL
+  ACCOUNT
+  COMMUNITY
+  CONTENT
+}
+
+enum EmailStatus {
+  PENDING
+  SENT
+  FAILED
+  SIMULATED
+}
+
+enum SourceKind {
+  NEWS
+  EVENT
+  TRENDING
+}
+
+enum AuditActor {
+  ADMIN
+  SYSTEM
+}
+
+enum FilePurpose {
+  AVATAR
+}
+
+model User {
+  id              String   @id @default(cuid())
+  email           String
+  emailNormalized String   @unique
+  username        String
+  usernameLower   String   @unique
+  displayName     String
+  passwordHash    String
+  about           String?
+  avatarFileId    String?
+  socialLinks     Json?
+  createdAt       DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime @updatedAt @db.Timestamptz(3)
+
+  settings        UserSettings?
+  sessions        Session[]
+  posts           Post[]
+  replies         Reply[]
+  votes           Vote[]
+  following       Follow[]                @relation("Follower")
+  followers       Follow[]                @relation("Following")
+  blocking        Block[]                 @relation("Blocker")
+  blockedBy       Block[]                 @relation("Blocked")
+  reports         Report[]
+  notifications   Notification[]
+  warnings        Warning[]
+  bans            Ban[]
+  mentions        Mention[]
+  deletionRequest AccountDeletionRequest?
+  passwordResets  PasswordResetToken[]
+  files           FileObject[]
+
+  @@index([createdAt])
+}
+
+model UserSettings {
+  id                String   @id @default(cuid())
+  userId            String   @unique
+  displayMode       String   @default("system")
+  accentColor       String   @default("violet")
+  newsOrder         String[] @default(["trending", "ai", "security", "leaders", "india"])
+  eventsOrder       String[] @default(["hackathons", "contests", "ctf"])
+  trendingOrder     String[] @default(["youtube", "repositories", "models", "datasets", "papers", "podcasts"])
+  profileVisibility Json     @default("{\"about\":true,\"socialLinks\":true,\"followers\":true,\"following\":true}")
+  notificationPrefs Json     @default("{\"social\":{\"onPlatform\":true,\"email\":false},\"account\":{\"onPlatform\":true,\"email\":true},\"community\":{\"onPlatform\":false,\"email\":false},\"content\":{\"onPlatform\":true,\"email\":false}}")
+  updatedAt         DateTime @updatedAt @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Session {
+  id         String   @id @default(cuid())
+  userId     String
+  tokenHash  String   @unique
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+  expiresAt  DateTime @db.Timestamptz(3)
+  lastUsedAt DateTime @default(now()) @db.Timestamptz(3)
+  ipHash     String?
+  userAgent  String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model AdminUser {
+  id           String    @id @default(cuid())
+  username     String    @unique
+  passwordHash String
+  createdAt    DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime  @updatedAt @db.Timestamptz(3)
+  lastLoginAt  DateTime? @db.Timestamptz(3)
+
+  sessions AdminSession[]
+}
+
+model AdminSession {
+  id         String   @id @default(cuid())
+  adminId    String
+  tokenHash  String   @unique
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+  expiresAt  DateTime @db.Timestamptz(3)
+  lastUsedAt DateTime @default(now()) @db.Timestamptz(3)
+
+  admin AdminUser @relation(fields: [adminId], references: [id], onDelete: Cascade)
+
+  @@index([adminId])
+}
+
+model EmailOtp {
+  id              String     @id @default(cuid())
+  emailNormalized String
+  purpose         OtpPurpose
+  codeHash        String
+  expiresAt       DateTime   @db.Timestamptz(3)
+  consumedAt      DateTime?  @db.Timestamptz(3)
+  invalidatedAt   DateTime?  @db.Timestamptz(3)
+  attempts        Int        @default(0)
+  ipHash          String?
+  createdAt       DateTime   @default(now()) @db.Timestamptz(3)
+
+  @@index([emailNormalized, purpose, createdAt])
+}
+
+model PendingRegistration {
+  id              String    @id @default(cuid())
+  emailNormalized String    @unique
+  tokenHash       String    @unique
+  expiresAt       DateTime  @db.Timestamptz(3)
+  consumedAt      DateTime? @db.Timestamptz(3)
+  createdAt       DateTime  @default(now()) @db.Timestamptz(3)
+}
+
+model PasswordResetToken {
+  id         String    @id @default(cuid())
+  userId     String
+  tokenHash  String    @unique
+  expiresAt  DateTime  @db.Timestamptz(3)
+  consumedAt DateTime? @db.Timestamptz(3)
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model LoginAttempt {
+  id             String    @id @default(cuid())
+  identifierHash String
+  ipHash         String
+  failCount      Int       @default(0)
+  windowStart    DateTime  @default(now()) @db.Timestamptz(3)
+  lockedUntil    DateTime? @db.Timestamptz(3)
+  updatedAt      DateTime  @updatedAt @db.Timestamptz(3)
+
+  @@unique([identifierHash, ipHash])
+  @@index([updatedAt])
+}
+
+model RateCounter {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  count       Int      @default(0)
+  windowStart DateTime @default(now()) @db.Timestamptz(3)
+  expiresAt   DateTime @db.Timestamptz(3)
+
+  @@index([expiresAt])
+}
+
+model Post {
+  id            String     @id @default(cuid())
+  authorId      String?
+  authorDeleted Boolean    @default(false)
+  title         String
+  content       Json?
+  excerpt       String     @default("")
+  kind          PostKind   @default(POST)
+  repostOfId    String?
+  score         Int        @default(0)
+  replyCount    Int        @default(0)
+  visibility    Visibility @default(VISIBLE)
+  isEdited      Boolean    @default(false)
+  createdAt     DateTime   @default(now()) @db.Timestamptz(3)
+  updatedAt     DateTime   @updatedAt @db.Timestamptz(3)
+  deletedAt     DateTime?  @db.Timestamptz(3)
+
+  author   User?            @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  repostOf Post?            @relation("Reposts", fields: [repostOfId], references: [id], onDelete: SetNull)
+  reposts  Post[]           @relation("Reposts")
+  replies  Reply[]
+  votes    Vote[]
+  reports  Report[]
+  cases    ModerationCase[]
+  mentions Mention[]
+
+  @@index([visibility, createdAt, id])
+  @@index([authorId, createdAt])
+  @@index([repostOfId])
+  @@index([createdAt, id])
+}
+
+model Reply {
+  id            String     @id @default(cuid())
+  postId        String
+  parentId      String?
+  authorId      String?
+  authorDeleted Boolean    @default(false)
+  content       Json
+  excerpt       String     @default("")
+  depth         Int        @default(1)
+  visibility    Visibility @default(VISIBLE)
+  createdAt     DateTime   @default(now()) @db.Timestamptz(3)
+  updatedAt     DateTime   @updatedAt @db.Timestamptz(3)
+  deletedAt     DateTime?  @db.Timestamptz(3)
+
+  post     Post    @relation(fields: [postId], references: [id], onDelete: Cascade)
+  parent   Reply?  @relation("ReplyTree", fields: [parentId], references: [id], onDelete: Cascade)
+  children Reply[] @relation("ReplyTree")
+  author   User?   @relation(fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@index([postId, createdAt])
+  @@index([postId, authorId])
+  @@index([parentId])
+}
+
+model Vote {
+  id        String   @id @default(cuid())
+  postId    String
+  userId    String
+  value     Int
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([postId, userId])
+  @@index([userId])
+}
+
+model Follow {
+  id          String   @id @default(cuid())
+  followerId  String
+  followingId String
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  follower  User @relation("Follower", fields: [followerId], references: [id], onDelete: Cascade)
+  following User @relation("Following", fields: [followingId], references: [id], onDelete: Cascade)
+
+  @@unique([followerId, followingId])
+  @@index([followingId])
+}
+
+model Block {
+  id        String   @id @default(cuid())
+  blockerId String
+  blockedId String
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  blocker User @relation("Blocker", fields: [blockerId], references: [id], onDelete: Cascade)
+  blocked User @relation("Blocked", fields: [blockedId], references: [id], onDelete: Cascade)
+
+  @@unique([blockerId, blockedId])
+  @@index([blockedId])
+}
+
+model Report {
+  id         String       @id @default(cuid())
+  postId     String
+  reporterId String
+  reason     ReportReason
+  details    String?
+  caseId     String?
+  createdAt  DateTime     @default(now()) @db.Timestamptz(3)
+
+  post     Post            @relation(fields: [postId], references: [id], onDelete: Cascade)
+  reporter User            @relation(fields: [reporterId], references: [id], onDelete: Cascade)
+  case     ModerationCase? @relation(fields: [caseId], references: [id], onDelete: SetNull)
+
+  @@unique([postId, reporterId])
+  @@index([caseId])
+}
+
+model ModerationCase {
+  id                 String           @id @default(cuid())
+  postId             String
+  status             ModerationStatus @default(PENDING_PROVIDER)
+  flagged            Boolean?
+  providerCategories Json?
+  providerScores     Json?
+  appealTokenHash    String?          @unique
+  appealExpiresAt    DateTime?        @db.Timestamptz(3)
+  appealUsedAt       DateTime?        @db.Timestamptz(3)
+  appealedAt         DateTime?        @db.Timestamptz(3)
+  appealMessage      String?
+  decidedAt          DateTime?        @db.Timestamptz(3)
+  decisionNote       String?
+  adminId            String?
+  lastError          String?
+  attempts           Int              @default(0)
+  createdAt          DateTime         @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime         @updatedAt @db.Timestamptz(3)
+
+  post     Post      @relation(fields: [postId], references: [id], onDelete: Cascade)
+  reports  Report[]
+  warnings Warning[]
+
+  @@index([postId, status])
+  @@index([status, appealExpiresAt])
+}
+
+model Warning {
+  id        String    @id @default(cuid())
+  userId    String
+  caseId    String?
+  reason    String
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  expiresAt DateTime  @db.Timestamptz(3)
+  revokedAt DateTime? @db.Timestamptz(3)
+
+  user User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  case ModerationCase? @relation(fields: [caseId], references: [id], onDelete: SetNull)
+
+  @@index([userId, expiresAt])
+}
+
+model Ban {
+  id        String    @id @default(cuid())
+  userId    String
+  reason    String
+  startsAt  DateTime  @default(now()) @db.Timestamptz(3)
+  endsAt    DateTime? @db.Timestamptz(3)
+  permanent Boolean   @default(false)
+  liftedAt  DateTime? @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, endsAt])
+}
+
+model Notification {
+  id        String               @id @default(cuid())
+  userId    String
+  type      String
+  category  NotificationCategory
+  title     String
+  body      String
+  data      Json?
+  readAt    DateTime?            @db.Timestamptz(3)
+  createdAt DateTime             @default(now()) @db.Timestamptz(3)
+  expiresAt DateTime             @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([expiresAt])
+}
+
+model EmailDelivery {
+  id        String      @id @default(cuid())
+  toEmail   String
+  template  String
+  payload   Json?
+  status    EmailStatus @default(PENDING)
+  attempts  Int         @default(0)
+  lastError String?
+  userId    String?
+  createdAt DateTime    @default(now()) @db.Timestamptz(3)
+  sentAt    DateTime?   @db.Timestamptz(3)
+
+  @@index([createdAt])
+  @@index([status])
+}
+
+model AccountDeletionRequest {
+  id           String    @id @default(cuid())
+  userId       String    @unique
+  requestedAt  DateTime  @default(now()) @db.Timestamptz(3)
+  scheduledFor DateTime  @db.Timestamptz(3)
+  cancelledAt  DateTime? @db.Timestamptz(3)
+  completedAt  DateTime? @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model EmailRestriction {
+  id        String   @id @default(cuid())
+  emailHash String   @unique
+  reason    String
+  expiresAt DateTime @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([expiresAt])
+}
+
+model FileObject {
+  id        String      @id @default(cuid())
+  key       String      @unique
+  mimeType  String
+  sizeBytes Int
+  width     Int?
+  height    Int?
+  purpose   FilePurpose @default(AVATAR)
+  ownerId   String?
+  createdAt DateTime    @default(now()) @db.Timestamptz(3)
+
+  owner User? @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+}
+
+model LinkPreviewCache {
+  id          String   @id @default(cuid())
+  urlHash     String   @unique
+  url         String
+  title       String?
+  description String?
+  imageUrl    String?
+  siteName    String?
+  fetchedAt   DateTime @default(now()) @db.Timestamptz(3)
+  expiresAt   DateTime @db.Timestamptz(3)
+}
+
+model ExternalSource {
+  id                  String     @id @default(cuid())
+  key                 String     @unique
+  name                String
+  kind                SourceKind
+  section             String
+  url                 String
+  enabled             Boolean    @default(true)
+  lastAttemptAt       DateTime?  @db.Timestamptz(3)
+  lastSuccessAt       DateTime?  @db.Timestamptz(3)
+  responseTimeMs      Int?
+  consecutiveFailures Int        @default(0)
+  lastError           String?
+  nextRetryAt         DateTime?  @db.Timestamptz(3)
+  createdAt           DateTime   @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime   @updatedAt @db.Timestamptz(3)
+
+  @@index([kind, section])
+}
+
+model ExternalItem {
+  id          String     @id @default(cuid())
+  sourceKey   String
+  kind        SourceKind
+  section     String
+  externalId  String
+  title       String
+  url         String
+  summary     String?
+  imageUrl    String?
+  author      String?
+  publishedAt DateTime?  @db.Timestamptz(3)
+  startsAt    DateTime?  @db.Timestamptz(3)
+  endsAt      DateTime?  @db.Timestamptz(3)
+  metadata    Json?
+  fetchedAt   DateTime   @default(now()) @db.Timestamptz(3)
+
+  @@unique([sourceKey, externalId])
+  @@index([kind, section, startsAt])
+  @@index([kind, section, publishedAt])
+  @@index([fetchedAt])
+}
+
+model Mention {
+  id        String   @id @default(cuid())
+  postId    String?
+  replyId   String?
+  userId    String
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  post Post? @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([postId])
+}
+
+model AuditLog {
+  id         String     @id @default(cuid())
+  actorType  AuditActor
+  actorId    String?
+  action     String
+  targetType String?
+  targetId   String?
+  metadata   Json?
+  ipHash     String?
+  createdAt  DateTime   @default(now()) @db.Timestamptz(3)
+
+  @@index([createdAt])
+  @@index([action])
+}
+
+model WorkerHeartbeat {
+  id         String   @id @default(cuid())
+  workerId   String   @unique
+  startedAt  DateTime @default(now()) @db.Timestamptz(3)
+  lastSeenAt DateTime @default(now()) @db.Timestamptz(3)
+  meta       Json?
+}
